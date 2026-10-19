@@ -7,6 +7,9 @@ filter. This repository targets Ubuntu 22.04 and ROS 2 Humble, including the
 `vslam` Docker container. Livox ROS 2 driver and SDK2 sources are included under
 `third_party/` and built locally. All commands below run inside the container.
 
+Loop closure and global pose-graph optimization are planned. See the
+[implementation and validation plan (Chinese)](docs/loop_closure_plan.md).
+
 ```bash
 docker exec -it vslam /bin/bash
 cd /work/code/3D/SuperM-LIO

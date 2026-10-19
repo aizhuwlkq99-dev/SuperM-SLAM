@@ -6,6 +6,8 @@
 仅支持 Ubuntu 22.04 / ROS 2 Humble，已在 `vslam` Docker 容器中验证。
 Livox ROS 2 驱动和 SDK2 源码位于本仓库 `third_party/`，随工程一起构建。
 
+回环与全局图优化尚未实现；设计和分阶段验收见[回环检测与图优化计划](docs/loop_closure_plan.md)。
+
 ## 构建与环境加载
 
 从宿主机进入容器后构建：

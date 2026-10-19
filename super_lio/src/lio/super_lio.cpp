@@ -1,5 +1,6 @@
 
 #include "lio/super_lio.h"
+#include "common/map_voxel_filter.h"
 
 #include <sys/resource.h>
 #include <tbb/parallel_for.h>
@@ -66,7 +67,7 @@ void SuperLIO::init(){
   ivox_.reset(new OctVoxMapType(OctVoxMapType::Options{g_ivox_resolution, g_ivox_capacity}));
   kf_.reset(new ESKF());
   data_wrapper_->setESKF(kf_);
-  
+
   scan_undistort_full_.reset(new PointCloudType());
   ds_undistort_.reset(new PointCloudType());
   world_pc_.reset(new PointCloudType());
@@ -75,12 +76,12 @@ void SuperLIO::init(){
   steady_cloud_world_.reset(new PointCloudType());
 
   dyn_filter_.reset(new DynObjFilterWrapper()); // M-Detector
-  dyn_filter_->init();
+  dyn_filter_->init(data_wrapper_->node());
 
   if(g_save_map){
     point_map_.reset(new PointCloudType());
   }
-  
+
   points_world_v3_.reserve(201000);
   abcd_vec_.resize(200000);
   effect_knn_idxs_.resize(200000);
@@ -113,7 +114,15 @@ void SuperLIO::process(){
   if(!data_wrapper_->sync_measure(measures_)){
     return;
   }
+  const auto begin = std::chrono::steady_clock::now();
   (this->*state_fn_)();
+  const double elapsed = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - begin).count();
+  const double delta = elapsed - processing_mean_ms_;
+  processing_mean_ms_ += delta / ++processing_samples_;
+  processing_m2_ += delta * (elapsed - processing_mean_ms_);
+  data_wrapper_->pub_processing_time(measures_.lidar.end_time, elapsed,
+      processing_mean_ms_, std::sqrt(processing_m2_ / processing_samples_));
 }
 
 
@@ -140,11 +149,11 @@ bool SuperLIO::kf_init(){
   V3 n = init_rot.col(0);
   double yaw = atan2(n(1), n(0));
 
-  M3 R_yaw_inv = Eigen::AngleAxis<scalar>(-yaw, V3::UnitZ()).toRotationMatrix(); 
+  M3 R_yaw_inv = Eigen::AngleAxis<scalar>(-yaw, V3::UnitZ()).toRotationMatrix();
 
   // init_rot represents the IMU orientation after gravity alignment (level orientation).
   // Perform LiDAR leveling correction, then transform the orientation into the robot frame.
-  M3 rot = g_lidar_robo_yaw * R_yaw_inv * init_rot;  
+  M3 rot = g_lidar_robo_yaw * R_yaw_inv * init_rot;
 
   ESKF::Options options;
   options.gyro_var_ = g_imu_ng;
@@ -247,6 +256,7 @@ void SuperLIO::FillBodyPoints(){
 /// the predicted one when the filter runs first.
 void SuperLIO::DynamicFilter(){
   const SE3 pose_end = kf_->GetSE3();
+  const auto input_count = ds_undistort_->size();
   const bool filtered = dyn_filter_->process(*ds_undistort_,
                                              points_body_v3_,
                                              pose_end,
@@ -255,7 +265,7 @@ void SuperLIO::DynamicFilter(){
                                              *steady_cloud_world_);
   if(filtered){
     data_wrapper_->pub_mdet_result(dyn_cloud_world_, steady_cloud_world_,
-                                   measures_.lidar.end_time);
+                                   measures_.lidar.end_time, input_count);
   }
 }
 
@@ -285,15 +295,7 @@ void SuperLIO::caceData(){
     return;
   }
 
-  static bool rm_PCD_dir = false;
-  if(!rm_PCD_dir){
-    rm_PCD_dir = true;
-    std::string cmd = "rm -rf " + g_save_map_dir + "/PCD";
-    [[maybe_unused]] int res;
-    res = system(cmd.c_str());
-    cmd = "mkdir -p " + g_save_map_dir + "/PCD";
-    res = system(cmd.c_str());
-  }
+  std::filesystem::create_directories(g_save_map_dir + "/PCD");
 
   if (point_map_->size() > 0 && scan_wait_num >= g_pcd_save_interval) {
     pcd_index_++;
@@ -325,7 +327,7 @@ void SuperLIO::ProcessCaceMap(){
       if (pcl::io::loadPCDFile<PointType>(entry.path().string(), *tmp_cloud) == 0) {
         *merged_map += *tmp_cloud;
         count++;
-        // LOG(INFO) << GREEN << " ---> Merged: " << entry.path().filename().string() 
+        // LOG(INFO) << GREEN << " ---> Merged: " << entry.path().filename().string()
         //           << "   size: " << tmp_cloud->size() << RESET;
       } else {
         LOG(WARNING) << RED << " ---> Failed to load: " << entry.path().string() << RESET;
@@ -339,16 +341,12 @@ void SuperLIO::ProcessCaceMap(){
 
   if(g_if_filter){
     LOG(INFO) << YELLOW << " ---> Downsampling merged map before final save..." << RESET;
-    pcl::VoxelGrid<PointType> voxel_filter;
-    voxel_filter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
-    
-    voxel_filter.setInputCloud(merged_map);
-    voxel_filter.filter(filtered_map);
+    filtered_map = downsampleSavedMap(*merged_map, g_map_ds_size);
   }else{
     LOG(INFO) << YELLOW << " ---> Not Downsampling merged map before final save..." << RESET;
     filtered_map = *merged_map;
   }
-  
+
   if (filtered_map.size() > 0) {
     filtered_map.width = filtered_map.size();
     filtered_map.height = 1;
@@ -384,11 +382,12 @@ void SuperLIO::saveMap(){
   if(!point_map_->empty()){
     std::string map_name = g_save_map_dir + "/" + g_map_name;
     LOG(INFO) << YELLOW << " ---> Save map to: " << map_name << RESET;
-    pcl::VoxelGrid<PointType> voxel_fliter;
     PointCloudType latst_map;
-    voxel_fliter.setInputCloud(point_map_);
-    voxel_fliter.setLeafSize(g_map_ds_size, g_map_ds_size, g_map_ds_size);
-    voxel_fliter.filter(latst_map);
+    if(g_if_filter){
+      latst_map = downsampleSavedMap(*point_map_, g_map_ds_size);
+    }else{
+      latst_map = *point_map_;
+    }
     if(latst_map.size() > 0){
       latst_map.width = latst_map.size();
       latst_map.height = 1;
@@ -419,13 +418,13 @@ void SuperLIO::Propagation_Undistort(){
   auto& raw_pc = measures_.lidar.pc;
 
   std::size_t ptsize = raw_pc->points.size();
-  scan_undistort_full_->resize(ptsize); 
+  scan_undistort_full_->resize(ptsize);
 
   tbb::parallel_for(
   tbb::blocked_range<size_t>(0, ptsize),
   [&](const tbb::blocked_range<size_t>& r) {
     M3 R_h, R_t; V3 p_h, v_h, acc_t, w_t;
-    for (size_t idx = r.begin(); idx < r.end(); ++idx) {  
+    for (size_t idx = r.begin(); idx < r.end(); ++idx) {
       auto& pt_full = scan_undistort_full_->points[idx];
       const auto& pt = raw_pc->points[idx];
       pt_full.intensity = pt.intensity;
@@ -533,7 +532,7 @@ void SuperLIO::Observe(){
           scalar error;
           effect_mask_[idx] = compute_error(abcd, point_world, _lengths[idx], error);
           if(!effect_mask_[idx]) continue;
-          
+
           {
             V3d normvec(abcd[0], abcd[1], abcd[2]);
             V3d nb = R_transpose * normvec;
@@ -541,7 +540,7 @@ void SuperLIO::Observe(){
             V6d J;
             J.head<3>() = point_body_d.cross(nb);
             J.tail<3>() = normvec;
-      
+
             local_acc.HTVH += J * 1000 * J.transpose();
             local_acc.HTVr -= J * 1000 * error;
           }
@@ -580,18 +579,18 @@ void SuperLIO::Observe(){
 void SuperLIO::UpdateMap() {
   const size_t ptsize = ds_undistort_->size();
   if (ptsize == 0) return;
-  
+
   last_pose_ = kf_->GetSE3();
   points_world_v3_.resize(ptsize);
-  
+
   const auto R = last_pose_.R_;
   const auto t = last_pose_.t_;
-  
+
   for (size_t i = 0; i < ptsize; ++i) {
     const auto& pt = points_body_v3_[i];
     points_world_v3_[i] = R * pt + t;
   }
-  
+
   ivox_->insert(points_world_v3_);
 
 }
@@ -599,14 +598,14 @@ void SuperLIO::UpdateMap() {
 
 void SuperLIO::Output(){
   auto state = kf_->GetNavState();
-  data_wrapper_->pub_odom(state);  
+  data_wrapper_->pub_odom(state);
 
   Eigen::Matrix4f transformation = Eigen::Matrix4f::Identity();
   transformation.block<3, 3>(0, 0) = state.R.R_.cast<float>();
   transformation.block<3, 1>(0, 3) = state.p.cast<float>();
 
   CloudPtr world_pc(new PointCloudType());
-  
+
   if(g_visual_map){
     static int count = -1;
     count++;

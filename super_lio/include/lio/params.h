@@ -23,7 +23,8 @@
 
 
 namespace LI2Sup{
-  
+  extern double g_max_scan_duration;
+
   extern const std::string g_root_dir;
   extern std::atomic<bool> g_flag_run;
   extern bool g_flg_map_init;
@@ -37,11 +38,11 @@ namespace LI2Sup{
   extern std::string g_save_map_dir;
   extern float g_map_ds_size;
   extern int   g_pcd_save_interval;
-  
+
   extern std::string g_imu_topic;
   extern std::string g_lidar_topic;
 
-  extern int   g_lidar_type;       // 1: mid360, 2: hesai16, 3: velo16, 4: velo32, 5: vel_nclt, 6: ls16 
+  extern int   g_lidar_type;       // 1: mid360, 2: hesai16, 3: velo16, 4: velo32, 5: vel_nclt, 6: ls16
   extern float g_blind2;
   extern float g_maxrange2;
   extern int   g_filter_rate;
@@ -62,7 +63,7 @@ namespace LI2Sup{
   /// hash_map
   extern std::size_t g_ivox_capacity;
   extern float       g_ivox_resolution;
-  
+
   /// kf
   extern int g_kf_type;            // 1: ESKF, 2: InESKF.
   extern int g_kf_max_iterations;
@@ -74,8 +75,8 @@ namespace LI2Sup{
   /// submaps
   extern double g_submap_resolution;
   extern int    g_submap_capacity;
-  
-  /// output  
+
+  /// output
   extern bool g_2_robot;
   extern bool g_2_plan_env_world;
   extern bool g_2_plan_env_body;

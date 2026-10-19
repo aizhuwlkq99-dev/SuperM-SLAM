@@ -4,6 +4,7 @@
 #define DYN_FILTER_H_
 
 #include <memory>
+#include <rclcpp/rclcpp.hpp>
 
 #include "basic/alias.h"
 #include "basic/Manifold.h"
@@ -25,9 +26,9 @@ public:
   DynObjFilterWrapper(const DynObjFilterWrapper&) = delete;
   DynObjFilterWrapper& operator=(const DynObjFilterWrapper&) = delete;
 
-  /// Reads "dyn_obj/*" parameters (enable flag and M-detector settings) from
-  /// the global parameter server. Must be called once before process().
-  void init();
+  /// Reads "dyn_obj.*" parameters (enable flag and M-detector settings) from
+  /// the shared ROS 2 node. Must be called once before process().
+  void init(const rclcpp::Node::SharedPtr& node);
 
   bool enabled() const { return enabled_; }
 

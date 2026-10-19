@@ -1,6 +1,9 @@
 #ifndef PARALLEL_Q_H
 #define PARALLEL_Q_H
 
+#include <cassert>
+#include <stdexcept>
+
 template <typename T>
 class PARALLEL_Q
 {
@@ -50,6 +53,8 @@ PARALLEL_Q<T>::~PARALLEL_Q()
 template <typename T>
 void PARALLEL_Q<T>::init(int len)
 {
+    if (len <= 0) throw std::invalid_argument("M-detector queue capacity must be positive");
+    if (initialized) delete[] q;
     Q_LEN = len;
     q = new T[Q_LEN];
     initialized = true;
@@ -131,10 +136,10 @@ void PARALLEL_Q<T>::push_pos(T &op, int index)
 
 template <typename T>
 void PARALLEL_Q<T>::push_parallel(T &op, int index)
-{   
+{
     assert(initialized && "Queue is not initialized!");
     if (counter == Q_LEN)
-    {   
+    {
         printf("Queue FULL. Head Element Popped! ");
         pop();
     }
@@ -146,7 +151,8 @@ template <typename T>
 void PARALLEL_Q<T>::push_parallel_prepare(int length)
 {
     assert(initialized && "Queue is not initialized!");
-    assert(counter + length < Q_LEN && "Push Length is out of Queue Capacity!");
+    if (length < 0 || length >= Q_LEN - counter)
+        throw std::runtime_error("M-detector queue capacity exceeded; increase dyn_obj.buffer_size");
     if (counter == Q_LEN)
     {
         printf("Queue FULL. Head Element Popped! ");
@@ -171,6 +177,6 @@ int PARALLEL_Q<T>::size()
 {
     assert(initialized && "Queue is not initialized!");
     return counter;
-} 
+}
 
 #endif

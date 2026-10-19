@@ -1,3 +1,7 @@
+> This vendored package is built as the ROS 2 Humble `dyn_obj_filter` library.
+> Use the embedded filter through `super_lio_node`; see the [workspace README](../README.md).
+> The upstream ROS 1 commands below are retained as reference and are not supported here.
+
 # M-detector
 
 ## 1.Introduction

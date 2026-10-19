@@ -1,4 +1,4 @@
-# catkin build artifacts (repo lives at src/ level; kept for safety if initialized higher)
+# Build artifacts
 build/
 devel/
 
@@ -8,8 +8,6 @@ super_lio/logs/
 *.pcd
 *.bag
 
-# livox_ros_driver is installed separately (see README), the workspace links it in
-livox_ros_driver
 
 # local tooling / editor noise
 .claude/
@@ -20,3 +18,11 @@ __pycache__/
 
 # M-detector upstream README assets
 M-detector/img/
+
+# ROS 2 workspace and validation outputs
+install/
+log/
+outputs/
+data/
+
+/*.log

@@ -1,7 +1,8 @@
 #ifndef DBSCAN_H
 #define DBSCAN_H
 
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
+#include <boost/shared_ptr.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <pcl/point_types.h>
@@ -57,36 +58,36 @@ public:
                 is_noise[i] = true;
                 continue;
             }
-            
+
             std::vector<int> seed_queue;
             seed_queue.push_back(i);
             types[i] = PROCESSED;
-            
+
             for (int j = 0; j < nn_size; j++) {
                 if (nn_indices[j] != i) {
                     seed_queue.push_back(nn_indices[j]);
                     types[nn_indices[j]] = PROCESSING;
                 }
-            } 
+            }
             int sq_idx = 1;
             while (sq_idx < seed_queue.size()) {
                 int cloud_index = seed_queue[sq_idx];
                 if (is_noise[cloud_index] || types[cloud_index] == PROCESSED) {
                     types[cloud_index] = PROCESSED;
                     sq_idx++;
-                    continue; 
+                    continue;
                 }
                 nn_size = radiusSearch(cloud_index, eps_, nn_indices, nn_distances);
                 if (nn_size >= minPts_) {
                     for (int j = 0; j < nn_size; j++) {
                         if (types[nn_indices[j]] == UN_PROCESSED) {
-                            
+
                             seed_queue.push_back(nn_indices[j]);
                             types[nn_indices[j]] = PROCESSING;
                         }
                     }
                 }
-                
+
                 types[cloud_index] = PROCESSED;
                 sq_idx++;
             }
@@ -100,33 +101,33 @@ public:
                 r.indices.erase (std::unique (r.indices.begin (), r.indices.end ()), r.indices.end ());
 
                 r.header = input_cloud_->header;
-                cluster_indices.push_back (r);  
+                cluster_indices.push_back (r);
             }
-        } 
+        }
         std::sort (cluster_indices.rbegin (), cluster_indices.rend (), comparePointClusters);
     }
 
     void setClusterTolerance(double tolerance) {
-        eps_ = tolerance; 
+        eps_ = tolerance;
     }
 
-    void setMinClusterSize (int min_cluster_size) { 
-        min_pts_per_cluster_ = min_cluster_size; 
+    void setMinClusterSize (int min_cluster_size) {
+        min_pts_per_cluster_ = min_cluster_size;
     }
 
-    void setMaxClusterSize (int max_cluster_size) { 
-        max_pts_per_cluster_ = max_cluster_size; 
+    void setMaxClusterSize (int max_cluster_size) {
+        max_pts_per_cluster_ = max_cluster_size;
     }
-    
+
     void setCorePointMinPts(int core_point_min_pts) {
         minPts_ = core_point_min_pts;
     }
 
 protected:
     PointCloudPtr input_cloud_;
-    
+
     double eps_ {0.0};
-    int minPts_ {1}; 
+    int minPts_ {1};
     int min_pts_per_cluster_ {1};
     int max_pts_per_cluster_ {std::numeric_limits<int>::max()};
 
@@ -159,4 +160,4 @@ protected:
     }
 };
 
-#endif 
+#endif

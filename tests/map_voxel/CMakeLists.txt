@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(map_voxel_check LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(PCL REQUIRED COMPONENTS common io)
+add_executable(map_voxel_check map_voxel_check.cpp)
+target_include_directories(map_voxel_check PRIVATE ../../super_lio/include ${PCL_INCLUDE_DIRS})
+target_link_libraries(map_voxel_check ${PCL_LIBRARIES})

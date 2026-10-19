@@ -4,19 +4,22 @@
 #include <omp.h>
 #include <mutex>
 #include <math.h>
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
+#include "basic/ros_parameters.h"
+using BASIC::stamp_from_seconds;
+#include <boost/shared_ptr.hpp>
 // #include <so3_math.h>
 #include <Eigen/Core>
 #include <types.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/ply_io.h>
-#include <nav_msgs/Path.h>
+#include <nav_msgs/msg/path.hpp>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-#include <nav_msgs/Odometry.h>
-#include <sensor_msgs/CompressedImage.h>
+#include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <pcl/filters/voxel_grid.h>
-#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <Eigen/LU>
 #include <m-detector/DynObjCluster.h>
@@ -74,7 +77,7 @@ struct point_soph
     V3D          last_closest;
     array<float, MAP_NUM> last_depth_interps = {};
     array<V3F, HASH_PRIM> last_vecs = {};
-    array<Vector3i, HASH_PRIM> last_positions = {};   
+    array<Vector3i, HASH_PRIM> last_positions = {};
     typedef boost::shared_ptr<point_soph> Ptr;
     point_soph(V3D & point, float & hor_resolution_max, float & ver_resolution_max)
     {
@@ -145,7 +148,7 @@ struct point_soph
         last_closest.setZero();
     };
     point_soph(const point_soph & cur)
-    {   
+    {
         vec = cur.vec;
         hor_ind  = cur.hor_ind;
         ver_ind  = cur.ver_ind;
@@ -220,10 +223,10 @@ public:
     typedef boost::shared_ptr<DepthMap> Ptr;
 
     DepthMap()
-    {   
+    {
         printf("build depth map2\n");
         depth_map.assign(MAX_2D_N, std::vector<point_soph*>());
-        
+
         time = 0.;
         project_R.setIdentity(3,3);
         project_T.setZero(3, 1);
@@ -248,8 +251,8 @@ public:
     }
 
     DepthMap(M3D rot, V3D transl, double cur_time, int frame)
-    {   
-        depth_map.assign(MAX_2D_N, std::vector<point_soph*>());       
+    {
+        depth_map.assign(MAX_2D_N, std::vector<point_soph*>());
         time = cur_time;
         project_R = rot;
         project_T = transl;
@@ -273,8 +276,8 @@ public:
     }
 
     DepthMap(const DepthMap & cur)
-    {   
-        depth_map = cur.depth_map;       
+    {
+        depth_map = cur.depth_map;
         time = cur.time;
         project_R = cur.project_R;
         project_T = cur.project_T;
@@ -282,14 +285,14 @@ public:
         min_depth_static = new float[MAX_2D_N];
         min_depth_all = new float[MAX_2D_N];
         max_depth_all = new float[MAX_2D_N];
-        max_depth_static = new float[MAX_2D_N];   
+        max_depth_static = new float[MAX_2D_N];
         fill_n(min_depth_static, MAX_2D_N, 0.0);
         fill_n(min_depth_all, MAX_2D_N, 0.0);
         fill_n(max_depth_all, MAX_2D_N, 0.0);
         fill_n(max_depth_static, MAX_2D_N, 0.0);
-        max_depth_index_all = new int[MAX_2D_N];       
+        max_depth_index_all = new int[MAX_2D_N];
         min_depth_index_all = new int[MAX_2D_N];
-        map_index = cur.map_index;      
+        map_index = cur.map_index;
         for(int i = 0; i < MAX_2D_N; i++)
         {
             min_depth_static[i] = cur.min_depth_static[i];
@@ -315,7 +318,7 @@ public:
     }
 
     void Reset(M3D rot, V3D transl, double cur_time, int frame)
-    {   
+    {
         time = cur_time;
         project_R = rot;
         project_T = transl;
@@ -336,7 +339,7 @@ public:
 };
 
 
-class DynObjFilter 
+class DynObjFilter
 {
 public:
     std::deque<DepthMap::Ptr> depth_map_list;
@@ -357,7 +360,7 @@ public:
     int laserCloudSteadObj_accu_times = 0;
     int laserCloudSteadObj_accu_limit = 5;
     float voxel_filter_size = 0.1;
-    
+
     DynObjCluster Cluster;
     bool cluster_coupled = false, cluster_future = false;
     std::vector<int> dyn_tag_cluster;
@@ -400,7 +403,7 @@ public:
 
     int    occu_time_th = 3, is_occu_time_th = 3, map_index = 0;
     int    case1_num = 0, case2_num = 0, case3_num = 0;
-    
+
     double time_interp1 = 0.0, time_interp2 = 0.0;
     double time_search = 0.0, time_search_0 = 0.0, time_research = 0.0, time_build = 0.0, time_other0 = 0.0, time_total = 0.0, time_total_avr = 0.0;
     float  buffer_time = 0.0f, buffer_dur = 0.1f;
@@ -421,9 +424,9 @@ public:
     double case2_total = 0.0;
     double case3_total = 0.0;
     bool dyn_filter_en = true;
-    mutex mtx_case2, mtx_case3; 
+    mutex mtx_case2, mtx_case3;
     std::vector<int> pos_offset;
-    ros::Publisher demo_pcl_display;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr demo_pcl_display;
     string time_file;
     ofstream time_out;
 
@@ -435,11 +438,13 @@ public:
     DynObjFilter(float windows_dur, float hor_resolution, float ver_resolution)
     : depth_map_dur(windows_dur), hor_resolution_max(hor_resolution), ver_resolution_max(ver_resolution)
     {};
-    ~DynObjFilter(){};
+    ~DynObjFilter(){
+        for(auto* points : point_soph_pointers) delete[] points;
+    };
 
-    void init(ros::NodeHandle& nh);
+    void init(rclcpp::Node& node);
     void filter(PointCloudXYZI::Ptr feats_undistort, const M3D & rot_end, const V3D & pos_end, const double & scan_end_time);
-    void publish_dyn(const ros::Publisher & pub_point_out, const ros::Publisher & pub_frame_out, const ros::Publisher & pub_steady_points, const double & scan_end_time);
+    void publish_dyn(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pub_point_out, const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pub_frame_out, const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pub_steady_points, const double & scan_end_time);
     void set_path(string file_path, string file_path_origin);
 
     void  Points2Buffer(vector<point_soph*> &points, std::vector<int> &index_vector);

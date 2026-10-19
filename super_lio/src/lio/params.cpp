@@ -6,37 +6,38 @@ using namespace std;
 using namespace BASIC;
 
 namespace LI2Sup{
+  double g_max_scan_duration = 0.2;
 
   const std::string g_root_dir = std::string(ROOT);
-  std::atomic<bool> g_flag_run = true; 
+  std::atomic<bool> g_flag_run = true;
   bool g_flg_map_init = true;
 
   /// evaluation
   bool g_time_evo = false;
 
-  bool   g_save_map;
-  bool   g_if_filter; 
-  string g_save_map_dir;
-  string g_map_name;
-  float  g_map_ds_size;
-  int    g_pcd_save_interval;
-  
-  string g_imu_topic;
-  string g_lidar_topic;
+  bool   g_save_map = false;
+  bool   g_if_filter = true;
+  string g_save_map_dir = "outputs/map";
+  string g_map_name = "map.pcd";
+  float  g_map_ds_size = 0.25f;
+  int    g_pcd_save_interval = 500;
 
-  int    g_lidar_type;
-  float  g_blind2;
-  float  g_maxrange2;
-  int    g_filter_rate;
-  bool   g_enable_downsample;
-  float  g_voxel_fliter_size;
+  string g_imu_topic = "/livox/imu";
+  string g_lidar_topic = "/livox/lidar";
 
-  int    g_imu_type;
+  int    g_lidar_type = 1;
+  float  g_blind2 = 0.64f;
+  float  g_maxrange2 = 3600.0f;
+  int    g_filter_rate = 3;
+  bool   g_enable_downsample = true;
+  float  g_voxel_fliter_size = 0.5f;
+
+  int    g_imu_type = 1;
   double g_gravity_norm = 9.7946;
-  double g_imu_na;
-  double g_imu_ng;
-  double g_imu_nba;
-  double g_imu_nbg;
+  double g_imu_na = 0.1;
+  double g_imu_ng = 0.1;
+  double g_imu_nba = 0.0001;
+  double g_imu_nbg = 0.0001;
 
   SE3 g_lidar_imu;
   SE3 g_odom_robo;
@@ -50,25 +51,25 @@ namespace LI2Sup{
   int g_kf_type = 1;                // 1: ESKF, 2: InESKF
   int g_kf_max_iterations = 4;
   bool g_kf_align_gravity = true;
-  double g_kf_quit_eps;
+  double g_kf_quit_eps = 0.001;
   int g_imu_int_frame = 50;         // fallback for yamls without kf/imu_int_frame
   bool g_dyn_filter_before_observe = false; // default: filter after Observe(), as before
 
-  /// submap 
-  double g_submap_resolution;
-  int    g_submap_capacity;
+  /// submap
+  double g_submap_resolution = 20.0;
+  int    g_submap_capacity = 100;
 
   /// output
   bool g_2_robot    = false;
-  bool g_2_plan_env_world = false; 
+  bool g_2_plan_env_world = false;
   bool g_2_plan_env_body  = false;
   bool g_2_ml_map = false;
   bool g_visual_map = true;
   bool g_visual_dense = false;
-  int  g_pub_step;
+  int  g_pub_step = 1;
 
   /// for planner
-  bool g_planner_enable;
+  bool g_planner_enable = false;
 
   ResidualType g_residual_type = PROB;
 
@@ -79,6 +80,6 @@ namespace LI2Sup{
   /// pose output
   bool g_pose_output_en = false;
   std::string g_seq_name = "trajectory";
-  std::string g_pose_output_dir = "/home/wsl-4080/code/traj_evo/pred/super-lio";
+  std::string g_pose_output_dir = "outputs/trajectory";
 
 }

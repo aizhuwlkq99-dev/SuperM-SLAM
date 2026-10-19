@@ -1,35 +1,38 @@
-
-#include <csignal>
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
+#include <tbb/global_control.h>
 #include "lio/super_lio_reloc.h"
-#include "ros/ROSWrapper.h"
+#include "basic/logs.h"
 
-
-using namespace LI2Sup;
-
-void SigHandle(int sig) {
-  g_flag_run = false;
-}
-
-int main(int argc, char** argv){
-  ros::init(argc, argv, "lio");
-  signal(SIGINT, SigHandle);
-  ros::NodeHandle nh;
-  LoadParamFromRos(nh);
-
-  ROSWrapper::Ptr data_wrapper = std::make_shared<ROSWrapper>();
-  auto lio = std::make_shared<SuperLIOReLoc>();
-  lio->setROSWrapper(data_wrapper);
-  lio->init();
-
-  ros::Rate rate(500);  // 500 Hz
-  while (ros::ok() && g_flag_run) {
-    data_wrapper->spinOnce();
-    lio->process();
-    rate.sleep();
+int main(int argc, char** argv) {
+  rclcpp::init(argc, argv);
+  google::InitGoogleLogging(argv[0]);
+  int result = 0;
+  try {
+    BASIC::init_log();
+    auto node = std::make_shared<rclcpp::Node>("relocation_node");
+    const int threads = node->declare_parameter<int>("processing_threads", 4);
+    if (threads < 1) throw std::invalid_argument("processing_threads must be positive");
+    tbb::global_control parallelism(tbb::global_control::max_allowed_parallelism, threads);
+    LI2Sup::LoadParamFromRos(*node);
+    auto wrapper = std::make_shared<LI2Sup::ROSWrapper>(node);
+    auto lio = std::make_shared<LI2Sup::SuperLIOReLoc>();
+    lio->setROSWrapper(wrapper);
+    lio->init();
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    rclcpp::WallRate rate(500);
+    while (rclcpp::ok() && LI2Sup::g_flag_run) {
+      executor.spin_some();
+      lio->process();
+      rate.sleep();
+    }
+    lio->saveMap();
+    lio->printTimeRecord();
+  } catch (const std::exception& e) {
+    LOG(ERROR) << e.what();
+    result = 1;
   }
-
-  lio->saveMap();
-  lio->printTimeRecord();
-  return 0;
+  rclcpp::shutdown();
+  google::ShutdownGoogleLogging();
+  return result;
 }

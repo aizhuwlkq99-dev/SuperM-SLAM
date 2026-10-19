@@ -1,9 +1,11 @@
 
 #include "lio/dyn_filter.h"
 
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
+#include <boost/shared_ptr.hpp>
 
 #include "basic/logs.h"
+#include "basic/ros_parameters.h"
 
 // M-detector. Deliberately included only here: its headers define
 // global-namespace symbols (PointType, V3D, ...) that would clash with
@@ -22,10 +24,8 @@ DynObjFilterWrapper::DynObjFilterWrapper() = default;
 DynObjFilterWrapper::~DynObjFilterWrapper() = default;
 
 
-void DynObjFilterWrapper::init(){
-  ros::NodeHandle nh;   // root handle: M-detector reads flat "dyn_obj/*" keys
-
-  nh.param<bool>("dyn_obj/en", enabled_, false);
+void DynObjFilterWrapper::init(const rclcpp::Node::SharedPtr& node){
+  BASIC::read_parameter(*node, "dyn_obj.en", enabled_, false);
   if(!enabled_){
     gINFO("[DynFilter]: disabled.");
     return;
@@ -33,7 +33,7 @@ void DynObjFilterWrapper::init(){
 
   impl_.reset(new Impl());
   impl_->filter.reset(new DynObjFilter());
-  impl_->filter->init(nh);
+  impl_->filter->init(*node);
   inited_ = true;
   gINFO("[DynFilter]: M-detector enabled.");
 }
@@ -62,13 +62,13 @@ bool DynObjFilterWrapper::process(BASIC::PointCloudType& cloud_body,
   PointCloudXYZI::Ptr feats(new PointCloudXYZI());
   feats->reserve(size);
   for(const auto& pt : cloud_body.points){
-    PointType p;   // pcl::PointXYZINormal (M-detector point type)
+    PointType p{};   // pcl::PointXYZINormal (M-detector point type)
     p.x = pt.x;
     p.y = pt.y;
     p.z = pt.z;
     p.intensity = pt.intensity;
     p.curvature = 0.0f;
-    feats->points.push_back(p);
+    feats->push_back(p);
   }
 
   impl_->filter->filter(feats, rot_end, pos_end, scan_end_time);
@@ -78,6 +78,7 @@ bool DynObjFilterWrapper::process(BASIC::PointCloudType& cloud_body,
   const std::vector<int>& final_tag = impl_->filter->cluster_coupled ?
       impl_->filter->dyn_tag_cluster : impl_->filter->dyn_tag_origin;
 
+  if(final_tag.size() != size) throw std::runtime_error("M-detector label count mismatch");
   dyn_cloud_world.clear();
   steady_cloud_world.clear();
   dyn_cloud_world.reserve(size);
@@ -102,12 +103,19 @@ bool DynObjFilterWrapper::process(BASIC::PointCloudType& cloud_body,
     po_w.intensity = pt.intensity;
 
     if(final_tag[i] == 1){
-      dyn_cloud_world.points.push_back(po_w);
+      dyn_cloud_world.push_back(po_w);
     }else{
-      steady_cloud_world.points.push_back(po_w);
-      cloud_static.points.push_back(pt);
+      steady_cloud_world.push_back(po_w);
+      cloud_static.push_back(pt);
       points_static.push_back(points_body[i]);
     }
+  }
+
+  // PCL uses width/height when transforming and serializing clouds. Keep the
+  // unorganized layout valid even when every point has been classified moving.
+  for (auto* cloud : {&cloud_static, &dyn_cloud_world, &steady_cloud_world}) {
+    cloud->width = static_cast<uint32_t>(cloud->size());
+    cloud->height = 1;
   }
 
   /// Only static points continue into the map update and the saved map.

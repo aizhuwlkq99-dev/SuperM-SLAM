@@ -1,111 +1,46 @@
 cmake_minimum_required(VERSION 3.16)
 project(super_lio)
-
-
-#DEBUG CONFIGURATION
-# set(CMAKE_BUILD_TYPE "Debug")
-# set(CMAKE_CXX_STANDARD 17)
-# set(CMAKE_CXX_FLAGS_DEBUG "-O0 -Wall -g -pthread -fsanitize=address")
-
-set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_STANDARD 17)
-# NOTE: no -flto here on purpose. LTO moves a full -O3 optimization pass of the
-# whole 'lio' static library into the link step, making every rebuild of
-# super_lio_node / relocation_node take minutes. Re-add "-flto=auto" only for a
-# final performance build.
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -pthread -fexceptions")
-add_definitions(-DROOT=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
-
-# Find packages
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(basic REQUIRED)
+find_package(m_detector REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(livox_ros_driver2 REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  rospy
-  basic
-  pcl_ros
-  std_msgs
-  geometry_msgs
-  sensor_msgs
-  visualization_msgs
-  nav_msgs
-  message_generation
-  livox_ros_driver
-  m_detector
-)
-find_package(PythonLibs REQUIRED)
-find_package(OpenCV REQUIRED)
-
-add_message_files(
-  FILES
-  CloudPose.msg
-  CloudPose2.msg
-)
-
-generate_messages(
-  DEPENDENCIES
-  std_msgs
-  sensor_msgs
-  geometry_msgs
-)
-
-# Include directories for libraries
-include_directories(
-  ${catkin_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
-  include
-  3rdparty
-)
-
-# Package setup for catkin
-catkin_package(
-  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime
-  DEPENDS EIGEN3 PCL
-  INCLUDE_DIRS include
-)
-
-# LIO library source files
-file(GLOB_RECURSE LIO_LIB_SRC "src/lio/*.cpp" "src/ros/*.cpp")
-
-file(GLOB_RECURSE LIO_LIB_HEADERS "include/lio/*.hpp" "include/lio/*.h")
-
-# library build
-add_library(lio ${LIO_LIB_SRC} ${LIO_LIB_HEADERS})
-
-# Target specific includes
+find_package(PCL REQUIRED)
+find_package(TBB REQUIRED)
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/CloudPose.msg" "msg/CloudPose2.msg"
+  DEPENDENCIES std_msgs sensor_msgs geometry_msgs)
+file(GLOB LIO_SOURCES CONFIGURE_DEPENDS src/lio/*.cpp src/ros/*.cpp)
+add_library(lio SHARED ${LIO_SOURCES})
+target_compile_definitions(lio PUBLIC ROOT="${CMAKE_CURRENT_SOURCE_DIR}/")
 target_include_directories(lio PUBLIC
-  include
-  3rdparty
-  ${EIGEN3_INCLUDE_DIRS}
-  ${catkin_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
-)
-
-# Linking libraries
-target_link_libraries(lio
-  ${EIGEN3_LIBRARIES}
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
-  ${PYTHON_LIBRARIES}
-  tbb
-  gflags
-  glog
-  dyn_obj_filter
-)
-add_dependencies(lio ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
-
-
-add_executable(super_lio_node src/apps/super_lio_node.cpp)
-target_link_libraries(super_lio_node
-  lio
-  ${catkin_LIBRARIES}
-)
-add_dependencies(super_lio_node ${catkin_EXPORTED_TARGETS})
-
-
-add_executable(relocation_node src/apps/relocation_node.cpp)
-target_link_libraries(relocation_node
-  lio
-  ${catkin_LIBRARIES}
-)
-add_dependencies(relocation_node ${catkin_EXPORTED_TARGETS})
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include> ${PCL_INCLUDE_DIRS})
+ament_target_dependencies(lio basic m_detector rclcpp sensor_msgs std_msgs geometry_msgs nav_msgs visualization_msgs pcl_conversions tf2_ros livox_ros_driver2)
+rosidl_get_typesupport_target(typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
+target_link_libraries(lio ${typesupport_target} Eigen3::Eigen ${PCL_LIBRARIES} TBB::tbb)
+foreach(app super_lio_node relocation_node)
+  add_executable(${app} src/apps/${app}.cpp)
+  target_link_libraries(${app} lio)
+  install(TARGETS ${app} DESTINATION lib/${PROJECT_NAME})
+endforeach()
+install(TARGETS lio LIBRARY DESTINATION lib)
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})
+get_filename_component(SUPERM_WORKSPACE_LOG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../log" ABSOLUTE)
+file(RELATIVE_PATH SUPERM_LOG_RELATIVE_DIR "${CMAKE_INSTALL_PREFIX}" "${SUPERM_WORKSPACE_LOG_DIR}")
+configure_file(env-hooks/logging.sh.in "${CMAKE_CURRENT_BINARY_DIR}/logging.sh" @ONLY)
+ament_environment_hooks("${CMAKE_CURRENT_BINARY_DIR}/logging.sh")
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()

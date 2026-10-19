@@ -1,0 +1,8 @@
+# Keep logs inside the workspace when its installed environment is sourced.
+# The relative path supports both isolated and merged colcon installations.
+_superm_package_prefix="${COLCON_CURRENT_PREFIX:-${AMENT_CURRENT_PREFIX:-@CMAKE_INSTALL_PREFIX@}}"
+_superm_default_log_dir="$(realpath -m "$_superm_package_prefix/@SUPERM_LOG_RELATIVE_DIR@")"
+export SUPERM_LOG_DIR="${SUPERM_LOG_DIR:-$_superm_default_log_dir}"
+export ROS_LOG_DIR="${ROS_LOG_DIR:-$SUPERM_LOG_DIR/ros}"
+export GLOG_log_dir="${GLOG_log_dir:-$SUPERM_LOG_DIR/glog}"
+unset _superm_default_log_dir _superm_package_prefix

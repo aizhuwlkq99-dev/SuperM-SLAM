@@ -5,7 +5,7 @@
 #include <Eigen/Geometry>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
-#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/msg/marker.hpp>
 
 struct bbox_s
 {
@@ -30,8 +30,8 @@ struct bbox_s
         return *this;
     }
 
-    void draw_bbox(visualization_msgs::Marker &cluster)
-    {   
+    void draw_bbox(visualization_msgs::msg::Marker &cluster)
+    {
         Eigen::Matrix<float, 8, 3> corners;
         corners.row(0) << low_point[0], low_point[1], low_point[2];
         corners.row(1) << up_point[0], low_point[1], low_point[2];
@@ -43,7 +43,7 @@ struct bbox_s
         corners.row(7) << up_point[0], up_point[1], up_point[2];
         corners = corners * R.transpose();
 
-        geometry_msgs::Point p;
+        geometry_msgs::msg::Point p;
         p.x = corners(0,0);
         p.y = corners(0,1);
         p.z = corners(0,2);
@@ -161,7 +161,7 @@ public:
         double volum_inter = Convexhull_volume(plane_clipped);
         return volum_inter / (volum_1 + volum_2 - volum_inter);
     }
-    
+
     void Box_clip(const bbox_s &box_src, const bbox_s &box_tar, std::vector<Plane> &plane_clipped)
     {
         Eigen::Matrix<float, 8, 3> vertices_tar_gl;
@@ -188,7 +188,7 @@ public:
             planes[5].push_back(vertices_tar_src.row(plane_down_id.at(i)));
         }
         for (int i = 0; i < 6; i++)
-        {   
+        {
             bool continue_tag = false;
             for (int j = 0; j < coincide_tags.size(); j++)
             {
@@ -202,9 +202,9 @@ public:
             coincide_tag[1] = i;
             Poly_clip_by_box(planes[i], box_src);
             if(planes[i].size() > 2)
-            {   
+            {
                 for (int j = 0; j < planes[i].size(); j++)
-                {   
+                {
                     planes[i][j] = box_src.R * planes[i][j];
                 }
                 plane_clipped.push_back(planes[i]);
@@ -222,7 +222,7 @@ public:
     }
 
     void Poly_clip_by_plane(Plane &plane, const Point &plane_src, const int &direction, const int &axis)
-    {   
+    {
         Plane result;
         if(plane.size() <= 2)
         {
@@ -321,7 +321,7 @@ public:
         }
         double volume_total = 0.0;
         for (int i = 0; i < plane_clipped.size(); i++)
-        {   
+        {
             double area = Convexhull_area(plane_clipped[i]);
             float  height = Point2Plane_dis(plane_clipped[i], center_box);
             volume_total += 1.0/3.0 * area * height;
@@ -350,12 +350,12 @@ public:
     }
 
     float Point2Plane_dis(const Plane &plane, Point center)
-    {   
+    {
         Eigen::Matrix<float, 3, 3> A;
         Eigen::Matrix<float, 3, 1> b;
         b.setOnes();
         b *= -1.0f;
-        for (int j = 0; j < 3; j++) 
+        for (int j = 0; j < 3; j++)
         {
             A(j, 0) = plane[j](0) + 1.0;
             A(j, 1) = plane[j](1) + 1.0;
@@ -363,15 +363,15 @@ public:
             center[j] += 1.0;
         }
         for (int j = 0; j < 3; j++)
-        {   
+        {
             if(abs(A(j,0)) < 0.1 &&  abs(A(j,1)) < 0.1 && abs(A(j,2)) < 0.1)
-            {   
+            {
                 Eigen::Vector3f add{2.0, 2.0, 2.0};
                 A.col(j) += add;
                 center[j] += 2.0;
             }
         }
-        
+
         Point normvec = A.colPivHouseholderQr().solve(b);
         float norm = normvec.norm();
         return fabs(center.dot(normvec) + 1) / norm;

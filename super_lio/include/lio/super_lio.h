@@ -64,7 +64,7 @@ protected:
   ROSWrapper::Ptr data_wrapper_;
   MeasureGroup measures_;
   DynObjFilterWrapper::Ptr dyn_filter_;
-  
+
   bool flg_init_ = false;
   bool flg_first_scan_ = true;
   std::vector<DynamicState> propagate_states_;
@@ -86,6 +86,9 @@ protected:
   int pcd_index_ = -1;
 
   Timer time_record_;
+  std::size_t processing_samples_ = 0;
+  double processing_mean_ms_ = 0.0;
+  double processing_m2_ = 0.0;
 };
 
 } // namespace END.

@@ -78,8 +78,11 @@ void SuperLIO::init(){
   dyn_filter_.reset(new DynObjFilterWrapper()); // M-Detector
   dyn_filter_->init(data_wrapper_->node());
 
-  if (g_save_map && data_wrapper_->node()->declare_parameter<std::string>("lio.map.mode",
-                                                                          "legacy") == "streamed") {
+  const auto map_mode =
+      data_wrapper_->node()->declare_parameter<std::string>("lio.map.mode", "legacy");
+  if (map_mode != "legacy" && map_mode != "streamed")
+    throw std::invalid_argument("lio.map.mode must be legacy or streamed");
+  if (g_save_map && map_mode == "streamed") {
     auto node = data_wrapper_->node();
     superm::StoreOptions options;
     const int queue_mib = node->declare_parameter<int>("lio.map.queue_mib", 128);

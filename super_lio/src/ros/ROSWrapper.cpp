@@ -497,7 +497,11 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::ConstSharedPtr& msg){
       }
       const auto pos = std::lower_bound(imu_buffer_.begin(), imu_buffer_.end(), data.secs,
           [](const auto& imu, double stamp) { return imu.secs < stamp; });
-      if (pos == imu_buffer_.end() || pos->secs != data.secs) imu_buffer_.insert(pos, data);
+      if (pos == imu_buffer_.end() || pos->secs != data.secs) {
+        if (imu_buffer_.size() >= max_imu_queue_)
+          throw std::runtime_error("IMU queue limit exceeded during reordering");
+        imu_buffer_.insert(pos, data);
+      }
       last_imu_arrival_ = std::chrono::steady_clock::now();
       // The optional high-rate predictor must also retain increasing time.
       return;

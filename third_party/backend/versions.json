@@ -1,0 +1,32 @@
+{
+  "gtsam": {
+    "repository": "borglab/gtsam",
+    "commit": "71a25ca36c084cbad1f872e812d6d97fbadfdb05",
+    "archive_sha256": "fa79b78a2cdd2561d4f93b75a61294a39c4d3a2d2e6e70dc51f91e6253966f96"
+  },
+  "small_gicp": {
+    "repository": "koide3/small_gicp",
+    "commit": "fa0cfc983417c044b6036f71dfa448038bb9c820",
+    "archive_sha256": "5a1eb2b81a21b4715571b4e953fa9c3759a4ae24f6b4a4b7d6c2ef0501ffb935"
+  },
+  "kiss_matcher": {
+    "repository": "MIT-SPARK/KISS-Matcher",
+    "commit": "8b58b118e00c7a5a22448741f8d956d638a44ae2",
+    "archive_sha256": "bbf0d4f6994342d70803060d7e14da3690baa019020ad1c955bec0f52c6f6df1"
+  },
+  "robin": {
+    "repository": "MIT-SPARK/ROBIN",
+    "commit": "5623f02f62c63711052bbb8d6096a410ddca0ee4",
+    "archive_sha256": "b687532ff4af30c87b5fc96bb413cbb01f47590eb168c5c26e101250c5888d95"
+  },
+  "xenium": {
+    "repository": "mpoeter/xenium",
+    "commit": "1c449ae953ce2a440b0d16c5ed1181d2754860ab",
+    "archive_sha256": "3057321e33c30be3a2ff5d0691cc70cdda8da046d73e5b822ccee4c9d12c83d4"
+  },
+  "pmc": {
+    "repository": "MIT-SPARK/pmc",
+    "commit": "4bbd40ababd8e925c4e1845c509173afe766b443",
+    "archive_sha256": "003be142014876a76da0d0042350e783f753b6dd6399c5f8a4bf672078c32d3e"
+  }
+}

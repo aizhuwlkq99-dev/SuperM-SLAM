@@ -26,3 +26,8 @@ outputs/
 data/
 
 /*.log
+
+# Reproducible backend dependency artifacts
+third_party/backend/sources/
+third_party/backend/build/
+third_party/backend/install/

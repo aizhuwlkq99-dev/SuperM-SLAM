@@ -63,7 +63,9 @@ def main():
         source = base / 'sources' / name
         for filename in ('LICENSE', 'LICENSE.txt', 'LICENSE.md', 'COPYING'):
             if (source / filename).is_file():
-                shutil.copyfile(source / filename, licenses / f'{name}_{filename}')
+                content = (source / filename).read_text()
+                (licenses / f'{name}_{filename}').write_text(
+                    '\n'.join(line.rstrip() for line in content.splitlines()) + '\n')
                 break
 
 

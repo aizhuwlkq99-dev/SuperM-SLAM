@@ -2,7 +2,7 @@
 ROBIN License
 -----------------------
 
-Copyright 2020 MIT 
+Copyright 2020 MIT
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 

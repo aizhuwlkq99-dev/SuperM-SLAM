@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='utf-8'?>
+<package format="3">
+  <name>super_lio_backend</name>
+  <version>1.0.0</version>
+  <description>Asynchronous disk-backed loop closure and pose graph</description>
+  <maintainer email="aizhuwlkq99@gmail.com">SuperM-LIO</maintainer>
+  <license>GPL-3.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>super_lio_mapping</depend>
+  <depend>super_lio_interfaces</depend>
+  <depend>rclcpp</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>pcl_conversions</depend>
+  <depend>visualization_msgs</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

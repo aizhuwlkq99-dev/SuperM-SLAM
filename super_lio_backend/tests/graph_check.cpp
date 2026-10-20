@@ -8,6 +8,12 @@
 
 namespace superm {
 struct BackendTestAccess {
+  static bool holdout_checks_passed(const Backend& backend) {
+    for (const auto& loop : backend.accepted_)
+      if (loop.holdout_after > loop.holdout_before + 1e-5)
+        return false;
+    return !backend.accepted_.empty();
+  }
   static bool bad_constraint(Backend& backend) {
     Backend::Verified loop;
     loop.old_key = 0;
@@ -96,6 +102,8 @@ int main(int argc, char** argv) {
     optimized.poll();
     optimized.save();
     require(optimized.loops() > 0, "True reverse-view revisit did not produce a verified loop");
+    require(superm::BackendTestAccess::holdout_checks_passed(optimized),
+            "Accepted loop worsened independent future geometry");
     auto poses = optimized.frame_poses();
     double raw =
         (odometry.frames().back().pose.block<3, 1>(0, 3) - truth.back().block<3, 1>(0, 3)).norm();

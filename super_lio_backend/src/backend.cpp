@@ -41,7 +41,7 @@ std::vector<Eigen::Vector3d> vectors(const Cloud& c) {
   return p;
 }
 struct Metrics {
-  double overlap = 0, rmse = 1e30, p95 = 1e30;
+  double overlap = 0, rmse = 1e30, p95 = 1e30, capped_rmse = 1e30;
 };
 Metrics metrics(const Cloud& source, const Cloud& target, const Eigen::Matrix4d& T,
                 double distance) {
@@ -50,19 +50,22 @@ Metrics metrics(const Cloud& source, const Cloud& target, const Eigen::Matrix4d&
   std::vector<int> ids(1);
   std::vector<float> ds(1);
   std::vector<double> residuals;
-  double sum = 0;
+  double sum = 0, capped_sum = 0;
   for (auto& p : source) {
     Eigen::Vector3d v = T.block<3, 3>(0, 0) * Eigen::Vector3d(p.x, p.y, p.z) + T.block<3, 1>(0, 3);
     pcl::PointXYZI q;
     q.x = v.x();
     q.y = v.y();
     q.z = v.z();
-    if (tree.nearestKSearch(q, 1, ids, ds) && ds[0] < distance * distance) {
+    const bool found = tree.nearestKSearch(q, 1, ids, ds) > 0;
+    capped_sum += found ? std::min<double>(ds[0], 1.0) : 1.0;
+    if (found && ds[0] < distance * distance) {
       sum += ds[0];
       residuals.push_back(std::sqrt(ds[0]));
     }
   }
   Metrics m;
+  m.capped_rmse = std::sqrt(capped_sum / std::max<size_t>(source.size(), 1));
   m.overlap = double(residuals.size()) / std::max<size_t>(source.size(), 1);
   if (!residuals.empty()) {
     m.rmse = std::sqrt(sum / residuals.size());
@@ -120,6 +123,13 @@ void Backend::poll() {
     frames_.push_back(f);
     cursor_ = uint64_t(in.tellg());
     insert(frames_.size() - 1);
+    if (ready_ && f.id >= keys_[ready_->current_key].frame + 5) {
+      if (accept(*ready_)) {
+        audit(*ready_, "accepted");
+        last_loop_time_ = frames_[keys_[ready_->current_key].frame].reference;
+      }
+      ready_.reset();
+    }
   }
 }
 Cloud Backend::submap(size_t index) const {
@@ -243,7 +253,7 @@ void Backend::insert(size_t index) {
   }
   isam_->update(factors, values);
   estimate_ = isam_->calculateEstimate();
-  if (!options_.loop_closure || f.reference - last_loop_time_ < 10)
+  if (!options_.loop_closure || ready_ || f.reference - last_loop_time_ < 10)
     return;
   std::vector<std::pair<double, size_t>> candidates;
   for (size_t k = 0; k < current; ++k) {
@@ -304,10 +314,8 @@ void Backend::insert(size_t index) {
                              frames_[keys_[pending_->old_key].frame].reference);
     if (dt < 10 && old_dt < 15 && diff.block<3, 1>(0, 3).norm() < .5 &&
         angle(diff) < 3 * M_PI / 180) {
-      if (accept(result)) {
-        audit(result, "accepted");
-        last_loop_time_ = f.reference;
-      }
+      ready_ = std::make_unique<Verified>(result);
+      audit(result, "awaiting_holdout", "neighbor consensus passed; wait for unused future frames");
       pending_.reset();
       return;
     }
@@ -386,7 +394,7 @@ bool Backend::verify(size_t old, size_t current, int shift, Verified& v) {
   v.relative = aligned.T_target_source.matrix();
   return true;
 }
-bool Backend::accept(const Verified& v) {
+bool Backend::accept(Verified& v) {
   auto trial = std::make_unique<gtsam::ISAM2>(*isam_);
   gtsam::NonlinearFactorGraph factors;
   gtsam::Vector6 sigma;
@@ -413,6 +421,57 @@ bool Backend::accept(const Verified& v) {
       audit(v, "rejected", "pose graph causes excessive local deformation");
       return false;
     }
+  }
+  const size_t old_frame = keys_[v.old_key].frame + 3;
+  const size_t current_frame = keys_[v.current_key].frame + 3;
+  if (current_frame >= frames_.size()) {
+    audit(v, "rejected", "independent future observations unavailable");
+    return false;
+  }
+  auto pose_at = [&](size_t index) {
+    size_t k = 0;
+    while (k + 1 < keys_.size() && keys_[k + 1].frame <= index)
+      ++k;
+    auto correction =
+        values.at<gtsam::Pose3>(k).compose(pose(frames_[keys_[k].frame].pose).inverse());
+    if (k + 1 < keys_.size()) {
+      auto next =
+          values.at<gtsam::Pose3>(k + 1).compose(pose(frames_[keys_[k + 1].frame].pose).inverse());
+      double duration = frames_[keys_[k + 1].frame].reference - frames_[keys_[k].frame].reference;
+      double alpha = std::clamp(
+          (frames_[index].reference - frames_[keys_[k].frame].reference) / std::max(duration, 1e-9),
+          0.0, 1.0);
+      correction = correction.compose(
+          gtsam::Pose3::Expmap(alpha * gtsam::Pose3::Logmap(correction.between(next))));
+    }
+    return Eigen::Matrix4d(correction.matrix() * frames_[index].pose);
+  };
+  auto heldout_cloud = [&](size_t index) {
+    auto frame = read_frame(store_, frames_[index]);
+    Cloud result;
+    for (const auto& point : frame.cloud)
+      if (point.getVector3fMap().allFinite() && point.getVector3fMap().head<2>().norm() < 30)
+        result.push_back(point);
+    return result;
+  };
+  auto target = heldout_cloud(old_frame);
+  auto source = heldout_cloud(current_frame);
+  if (source.size() < 200 || target.size() < 200) {
+    audit(v, "rejected", "insufficient independent static observations");
+    return false;
+  }
+  Eigen::Matrix4d raw_relative = frames_[old_frame].pose.inverse() * frames_[current_frame].pose;
+  Eigen::Matrix4d optimized_relative = pose_at(old_frame).inverse() * pose_at(current_frame);
+  const auto raw_forward = metrics(source, target, raw_relative, .5);
+  const auto raw_reverse = metrics(target, source, raw_relative.inverse(), .5);
+  const auto opt_forward = metrics(source, target, optimized_relative, .5);
+  const auto opt_reverse = metrics(target, source, optimized_relative.inverse(), .5);
+  v.holdout_before = std::max(raw_forward.capped_rmse, raw_reverse.capped_rmse);
+  v.holdout_after = std::max(opt_forward.capped_rmse, opt_reverse.capped_rmse);
+  if (opt_forward.capped_rmse > raw_forward.capped_rmse + 1e-5 ||
+      opt_reverse.capped_rmse > raw_reverse.capped_rmse + 1e-5) {
+    audit(v, "rejected", "independent future static geometry becomes worse");
+    return false;
   }
   isam_ = std::move(trial);
   estimate_ = values;
@@ -457,6 +516,7 @@ bool Backend::reject_last_loop() {
   isam_ = std::move(rebuilt);
   estimate_ = isam_->calculateEstimate();
   pending_.reset();
+  ready_.reset();
   Verified v;
   audit(v, "revoked", "last accepted loop removed; graph rebuilt including subsequent odometry");
   save();
@@ -520,7 +580,9 @@ void Backend::audit(const Verified& v, const std::string& event, const std::stri
   audit_ << std::setprecision(17) << "{\"event\":" << json_string(event)
          << ",\"reason\":" << json_string(reason) << ",\"old\":" << v.old_key
          << ",\"current\":" << v.current_key << ",\"score\":" << v.score
-         << ",\"overlap\":" << v.overlap << ",\"rmse\":" << v.rmse << ",\"relative\":[";
+         << ",\"overlap\":" << v.overlap << ",\"rmse\":" << v.rmse
+         << ",\"holdout_before\":" << v.holdout_before << ",\"holdout_after\":" << v.holdout_after
+         << ",\"relative\":[";
   for (int r = 0; r < 4; ++r)
     for (int c = 0; c < 4; ++c) {
       if (r || c)

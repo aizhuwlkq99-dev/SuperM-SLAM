@@ -49,6 +49,7 @@ class Backend {
     Eigen::Matrix4d relative = Eigen::Matrix4d::Identity(),
                     correction = Eigen::Matrix4d::Identity();
     double score = 0, overlap = 0, rmse = 0;
+    double holdout_before = 0, holdout_after = 0;
   };
   Cloud submap(size_t frame) const;
   Descriptor descriptor(const Cloud&) const;
@@ -56,7 +57,7 @@ class Backend {
   Descriptor read_descriptor(size_t key) const;
   void insert(size_t frame);
   bool verify(size_t old_key, size_t current_key, int yaw_shift, Verified& result);
-  bool accept(const Verified& loop);
+  bool accept(Verified& loop);
   void audit(const Verified&, const std::string& event, const std::string& reason = "");
   fs::path store_, output_;
   BackendOptions options_;
@@ -67,7 +68,7 @@ class Backend {
   std::unique_ptr<gtsam::ISAM2> isam_;
   std::fstream descriptors_;
   std::ofstream audit_;
-  std::unique_ptr<Verified> pending_;
+  std::unique_ptr<Verified> pending_, ready_;
   std::vector<Verified> accepted_;
   size_t loops_ = 0;
   double last_loop_time_ = -1e30;

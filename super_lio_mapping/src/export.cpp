@@ -1,4 +1,6 @@
+#include <fcntl.h>
 #include <pcl/common/transforms.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -52,6 +54,27 @@ void checked(std::ostream& out) {
   if (!out)
     throw std::runtime_error("map export write failed");
 }
+void close_checked(std::ofstream& out) {
+  out.close();
+  checked(out);
+}
+void sync_path(const fs::path& path, bool directory = false) {
+  int fd = ::open(path.c_str(), O_RDONLY | (directory ? O_DIRECTORY : 0));
+  if (fd < 0)
+    throw std::runtime_error("cannot open exported file for sync");
+  const int status = ::fsync(fd);
+  ::close(fd);
+  if (status)
+    throw std::runtime_error("export sync failed");
+}
+template <class Record>
+bool read_record(std::istream& input, Record& record) {
+  if (input.read(reinterpret_cast<char*>(&record), sizeof(record)))
+    return true;
+  if (input.eof() && input.gcount() == 0)
+    return false;
+  throw std::runtime_error("truncated or unreadable export intermediate");
+}
 void header(std::ostream& out, uint64_t count,
             const Eigen::Vector3d& origin = Eigen::Vector3d::Zero()) {
   out << "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z intensity\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 "
@@ -85,7 +108,7 @@ uint64_t merge(const std::vector<fs::path>& files, const fs::path& output) {
   std::priority_queue<Item, std::vector<Item>, Compare> heap;
   for (size_t i = 0; i < inputs.size(); ++i) {
     Cell c;
-    if (inputs[i].read(reinterpret_cast<char*>(&c), sizeof(c)))
+    if (read_record(inputs[i], c))
       heap.push({c, i});
   }
   std::ofstream out(output, std::ios::binary);
@@ -106,17 +129,14 @@ uint64_t merge(const std::vector<fs::path>& files, const fs::path& output) {
     } else
       add(current, item.cell);
     Cell next;
-    if (inputs[item.index].read(reinterpret_cast<char*>(&next), sizeof(next)))
+    if (read_record(inputs[item.index], next))
       heap.push({next, item.index});
-    else if (!inputs[item.index].eof())
-      throw std::runtime_error("corrupt export run");
   }
   if (have) {
     out.write(reinterpret_cast<char*>(&current), sizeof(current));
     ++n;
   }
-  checked(out);
-  out.close();
+  close_checked(out);
   return n;
 }
 fs::path reduce_tile(const fs::path& bucket, const fs::path& work, size_t budget, double leaf) {
@@ -130,7 +150,7 @@ fs::path reduce_tile(const fs::path& bucket, const fs::path& work, size_t budget
   DiskPoint p;
   while (true) {
     cells.clear();
-    while (cells.size() < maximum && input.read(reinterpret_cast<char*>(&p), sizeof(p))) {
+    while (cells.size() < maximum && read_record(input, p)) {
       Cell c{};
       c.key = key_of(p.xyz, leaf);
       for (int i = 0; i < 3; ++i)
@@ -154,7 +174,7 @@ fs::path reduce_tile(const fs::path& bucket, const fs::path& work, size_t budget
       }
     }
     out.write(reinterpret_cast<char*>(&current), sizeof(current));
-    checked(out);
+    close_checked(out);
     runs.push_back(path);
   }
   if (!input.eof())
@@ -252,8 +272,7 @@ ExportResult export_map(const fs::path& root, const fs::path& output,
         if (open.size() >= 16) {
           auto old = std::min_element(open.begin(), open.end(),
                                       [](auto& a, auto& b) { return a.second.age < b.second.age; });
-          checked(old->second.stream);
-          old->second.stream.close();
+          close_checked(old->second.stream);
           open.erase(old);
         }
         auto path = staging / "work" / ("bucket_" + name(tile));
@@ -269,8 +288,7 @@ ExportResult export_map(const fs::path& root, const fs::path& output,
     ++result.frames;
   }
   for (auto& item : open) {
-    checked(item.second.stream);
-    item.second.stream.close();
+    close_checked(item.second.stream);
   }
   open.clear();
   std::ostringstream manifest;
@@ -293,9 +311,10 @@ ExportResult export_map(const fs::path& root, const fs::path& output,
     header(out, count, origin);
     std::ifstream in(sorted, std::ios::binary);
     Cell c;
-    while (in.read(reinterpret_cast<char*>(&c), sizeof(c)))
+    while (read_record(in, c))
       point(out, c, origin);
-    checked(out);
+    close_checked(out);
+    sync_path(staging / "tiles" / filename);
     if (result.tiles++)
       manifest << ',';
     manifest << "{\"file\":" << json_string("tiles/" + filename) << ",\"points\":" << count
@@ -310,16 +329,19 @@ ExportResult export_map(const fs::path& root, const fs::path& output,
     for (auto& p : final_runs) {
       std::ifstream in(p, std::ios::binary);
       Cell c;
-      while (in.read(reinterpret_cast<char*>(&c), sizeof(c)))
+      while (read_record(in, c))
         point(out, c, Eigen::Vector3d::Zero());
     }
-    checked(out);
+    close_checked(out);
+    sync_path(staging / "map.pcd");
   }
   manifest << "],\"points\":" << result.points << ",\"input_points\":" << result.input_points
            << ",\"complete\":true}\n";
+  sync_path(staging / "tiles", true);
   atomic_text(staging / "manifest.json", manifest.str());
   fs::remove_all(staging / "work");
   fs::rename(staging, output);
+  sync_path(fs::absolute(output).parent_path(), true);
   return result;
 }
 }  // namespace superm

@@ -112,11 +112,21 @@ FrameStore::FrameStore(const fs::path& root, StoreOptions opt,
   if (fs::exists(root_ / "index.txt") || fs::exists(root_ / "manifest.json"))
     throw std::runtime_error("store already exists; use a new run directory");
   lock_fd_ = ::open((root_ / "writer.lock").c_str(), O_RDWR | O_CREAT, 0644);
-  if (lock_fd_ < 0 || ::flock(lock_fd_, LOCK_EX | LOCK_NB))
+  if (lock_fd_ < 0 || ::flock(lock_fd_, LOCK_EX | LOCK_NB)) {
+    if (lock_fd_ >= 0)
+      ::close(lock_fd_);
+    lock_fd_ = -1;
     throw std::runtime_error("store is locked");
-  atomic_text(root_ / "index.txt", "");
-  manifest(false);
-  worker_ = std::thread(&FrameStore::run, this);
+  }
+  try {
+    atomic_text(root_ / "index.txt", "");
+    manifest(false);
+    worker_ = std::thread(&FrameStore::run, this);
+  } catch (...) {
+    ::close(lock_fd_);
+    lock_fd_ = -1;
+    throw;
+  }
 }
 FrameStore::~FrameStore() {
   try {
@@ -174,16 +184,24 @@ void FrameStore::close() {
   if (worker_.joinable())
     worker_.join();
   auto s = stats();
-  if (!error_.empty())
-    throw std::runtime_error("frame store: " + error_);
   if (!closed_) {
-    manifest(s.queued == s.durable);
-    closed_ = true;
+    try {
+      manifest(s.error.empty() && s.queued == s.durable);
+      closed_ = true;
+    } catch (...) {
+      if (lock_fd_ >= 0) {
+        ::close(lock_fd_);
+        lock_fd_ = -1;
+      }
+      throw;
+    }
     if (lock_fd_ >= 0) {
       ::close(lock_fd_);
       lock_fd_ = -1;
     }
   }
+  if (!s.error.empty())
+    throw std::runtime_error("frame store: " + s.error);
 }
 void FrameStore::commit() {
   if (fd_ < 0)

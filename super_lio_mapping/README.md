@@ -25,3 +25,9 @@ ros2 run super_lio_mapping mapping_check outputs/unique_storage_test
 The check covers lossless frame reads, bounded external merging against the
 previous voxel filter, negative coordinates, weighted attributes, index recovery,
 and corrupted payload rejection. Test paths must be new directories.
+
+`mapping_fault_check NEW_DIRECTORY` injects queue overflow and partial file
+writes using a child-process file-size limit. It verifies incomplete manifests,
+released writer locks, unchanged durable counts, and unpublished failed exports.
+The exporter checks stream close errors and syncs final tiles before publishing
+the version manifest. Real power-loss recovery requires separate testing.

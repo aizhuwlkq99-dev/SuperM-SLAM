@@ -7,8 +7,10 @@ filter. This repository targets Ubuntu 22.04 and ROS 2 Humble, including the
 `vslam` Docker container. Livox ROS 2 driver and SDK2 sources are included under
 `third_party/` and built locally. All commands below run inside the container.
 
-Loop closure and global pose-graph optimization are planned. See the
-[implementation and validation plan (Chinese)](docs/loop_closure_plan.md).
+Bounded streaming frame storage, external-memory dense tile export, and an
+independent loop backend are available. Raw mapping poses remain the default;
+loop optimization requires explicit enablement and separate quality review.
+See the usage below and [validation record (Chinese)](docs/streaming_validation.md).
 
 ```bash
 docker exec -it vslam /bin/bash
@@ -26,6 +28,82 @@ source /work/code/3D/SuperM-LIO/install/setup.bash
 
 No FAST-LIVO2 installation environment is needed. Build artifacts are local to
 this repository. Use a fresh terminal when changing workspaces.
+
+## Large-scale streaming mapping
+
+Streaming mode stores every effective static processing frame, retaining the
+existing ESKF, OctVox, dynamic filtering, and map resolutions. External sorting
+exports dense tiles without loading the complete point cloud into RAM at shutdown.
+Existing dataset launch files retain the `legacy` saving mode.
+
+Build the optional backend; checked, pinned dependencies install inside this repository:
+
+```bash
+./scripts/build_humble.sh --with-backend
+source install/setup.bash
+ros2 launch super_lio_backend large_scale.launch.py dataset:=nclt \
+  output_dir:=/work/code/3D/SuperM-LIO/outputs/my_nclt rviz:=true
+```
+
+Replay from another terminal with this workspace sourced:
+
+```bash
+ros2 bag play data/NCLT/20130110 --clock --delay 2 \
+  --wait-for-all-acked 5000 --topics points_raw imu_raw
+```
+
+For Retail, select `dataset:=retail` and play
+`/work/code/3D/fast_ws/src/FAST-LIVO2-ROS2/data/Retail_Street`.
+Use a new or empty output directory. After playback, press Ctrl-C in the mapping
+terminal and wait for export to finish. Map voxels remain **0.10 m for NCLT** and
+**0.05 m for Retail**.
+
+```text
+outputs/my_nclt/
+├── parameters.yaml         # Resolved frontend configuration
+├── provenance.json         # Configuration hash, source revision, dirty-tree flag
+├── map/store/              # Immutable static body frames, raw poses, index and manifest
+├── graph/                  # Per-frame pose snapshot, keyframes, loop audit and report
+├── trajectory/             # Complete raw TUM trajectory
+└── maps/raw/               # Full-density tiles and manifest.json
+```
+
+**Loop closure defaults to disabled** to preserve existing mapping results.
+`loop_closure:=true shutdown_export:=both` enables the experimental backend and
+also exports `maps/optimized/`, retaining the raw map. The backend implements
+Scan Context retrieval, KISS-Matcher/small_gicp registration, delayed independent
+frame checks, robust iSAM2, and constraint revocation. Independent real NCLT
+checks do not yet establish improvement across every evaluated revisit.
+
+Re-export an ROI, view tiles, or evaluate an offline optimized version:
+
+```bash
+ros2 run super_lio_mapping superm_export outputs/my_nclt/map/store \
+  outputs/my_nclt/exports/roi --leaf 0.1 --memory-mib 256 --pcd \
+  --roi -20 -20 -10 80 80 20
+ros2 launch super_lio_backend map_view.launch.py \
+  manifest:=/work/code/3D/SuperM-LIO/outputs/my_nclt/maps/raw/manifest.json \
+  center_x:=0.0 center_y:=0.0 radius:=100.0 max_points:=200000
+ros2 run super_lio_backend superm_optimize outputs/my_nclt/map/store \
+  outputs/my_nclt/graph_review
+ros2 run super_lio_mapping superm_export outputs/my_nclt/map/store \
+  outputs/my_nclt/maps/review --leaf 0.1 --poses outputs/my_nclt/graph_review/poses.txt
+```
+
+Each tile uses local coordinates: add its double-precision `origin` from the
+manifest when assembling it. The supplied viewer applies origins, colors by
+height, and limits preview points without changing dense files. `--pcd` also
+writes a conventional world-coordinate PCD for small regions. Choose
+`shutdown_export:=none` to store frames and graph now and export later.
+`/slam/save_map` exports asynchronously; `/slam/reject_last_loop` revokes the last
+accepted constraint. See the [backend interface guide](super_lio_backend/README.md).
+
+The full NCLT control produced identical 10,200-frame trajectories; frontend peak
+RSS fell from 3,868 MiB to 823 MiB. Export resources are measured separately.
+Continuous tens-of-kilometers accuracy, frontend large-coordinate precision,
+and total concurrent container memory remain unvalidated. See the
+[validation record and limits (Chinese)](docs/streaming_validation.md) and
+[implementation stages (Chinese)](docs/large_scale_mapping_plan.md).
 
 ## Log directories
 
@@ -229,8 +307,14 @@ separate purpose and does not specify the saved PCD resolution.
 Edit these values, run `./scripts/build_humble.sh`, and replay into a new output
 directory. Existing PCD files cannot recover discarded measurements. For even
 more detail, try `voxel_fliter_size: 0.10` and `ds_size: 0.03` and check processing
-time; these optional settings have not been benchmarked. To retain all points
-in the static mapping input, set `lio.map.if_filter: false`. This disables the
+time; these optional settings have not been benchmarked.
+
+The `if_filter` and `save_interval` settings below apply to legacy saving.
+Streaming stores static frames losslessly; the backend `map_leaf` or exporter
+`--leaf` controls final voxel resolution.
+
+To retain all points in the static mapping input, set `lio.map.if_filter: false`.
+This disables the
 final spatial voxel filter; it does not disable M-detector. It works both with
 chunked saving and with `lio.map.save_interval: -1`. The latter accumulates the
 whole sequence in memory. A positive save interval writes chunks every N

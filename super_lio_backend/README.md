@@ -8,7 +8,9 @@ Every processed mapping frame remains available for final dense reconstruction.
 Candidates use global descriptor retrieval and spatial neighbors. Geometry is
 verified with small_gicp and optional KISS-Matcher coarse registration, followed
 by bidirectional residual, overlap, degeneracy, gravity, and neighboring-keyframe
-checks. A robust SE(3) iSAM2 graph stages each constraint before accepting it.
+checks. A candidate waits for future static frames unused by registration;
+constraints that worsen either directional capped residual are rejected. A robust
+SE(3) iSAM2 graph stages each constraint before accepting it.
 These checks reduce false closures; they do not establish absolute accuracy on
 unlabelled data. Default noise values require dataset-specific evaluation.
 
@@ -47,3 +49,11 @@ validation records for measured results. These checks cover known reverse-view
 revisits, global registration direction, unchanged no-loop poses, gross false
 constraints, revocation, asynchronous export, and bounded ROS tile visualization.
 Real continuous 30–50 km accuracy has not yet been validated.
+
+The repository's `large_scale.launch.py` defaults to `loop_closure:=false`.
+`shutdown_export:=raw` exports raw dense tiles on orderly shutdown; `both` also
+exports the optimized version, and `none` leaves export to the standalone tool.
+The launch records resolved frontend parameters and Git/configuration provenance.
+It supports `dataset:=nclt` and `dataset:=retail` without loading other workspaces.
+Use `map_view.launch.py manifest:=/absolute/map/manifest.json` to inspect tiles.
+See [measured results and quality limits](../docs/streaming_validation.md).

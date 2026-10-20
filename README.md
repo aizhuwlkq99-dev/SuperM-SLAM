@@ -6,7 +6,8 @@
 仅支持 Ubuntu 22.04 / ROS 2 Humble，已在 `vslam` Docker 容器中验证。
 Livox ROS 2 驱动和 SDK2 源码位于本仓库 `third_party/`，随工程一起构建。
 
-回环与全局图优化尚未实现；设计和分阶段验收见[回环检测与图优化计划](docs/loop_closure_plan.md)。
+已增加有界流式帧存储、外存稠密瓦片导出和独立回环后端。默认保留原始建图轨迹，
+回环优化需显式启用并单独验收。见下方使用说明与[验证记录](docs/streaming_validation.md)。
 
 ## 构建与环境加载
 
@@ -27,6 +28,73 @@ source /work/code/3D/SuperM-LIO/install/setup.bash
 ```
 
 切换工作空间时建议使用新终端。构建和运行只需本仓库的安装环境。
+
+## 大场景流式建图
+
+流式模式保存全部有效静态处理帧，前端 ESKF、OctVox 和动态筛选参数保持原配置。
+地图由外存排序归并导出，不再在退出时把所有点云读回内存。旧入口继续使用 `legacy` 模式。
+
+首次构建后端（会下载校验过的固定版本依赖，安装在本仓库）：
+
+```bash
+./scripts/build_humble.sh --with-backend
+source install/setup.bash
+ros2 launch super_lio_backend large_scale.launch.py dataset:=nclt \
+  output_dir:=/work/code/3D/SuperM-LIO/outputs/my_nclt rviz:=true
+```
+
+在第二个已加载本仓库环境的终端回放：
+
+```bash
+ros2 bag play data/NCLT/20130110 --clock --delay 2 \
+  --wait-for-all-acked 5000 --topics points_raw imu_raw
+```
+
+Retail 使用 `dataset:=retail`，回放路径为
+`/work/code/3D/fast_ws/src/FAST-LIVO2-ROS2/data/Retail_Street`。
+输出目录必须为新目录或空目录。回放结束后在建图终端按 Ctrl-C，等待退出导出完成。
+默认保留 NCLT **0.10 m**、Retail **0.05 m** 的地图体素。
+
+```text
+outputs/my_nclt/
+├── parameters.yaml         # 实际使用的前端参数
+├── provenance.json         # 配置校验值、源码版本、工作区是否有修改
+├── map/store/              # 不可变静态本体帧、原始位姿、索引及完整性清单
+├── graph/                  # 逐帧位姿快照、关键帧、回环审计及报告
+├── trajectory/             # 原始完整 TUM 轨迹
+└── maps/raw/               # 完整密度瓦片及 manifest.json
+```
+
+**默认关闭回环**以保持已有建图结果。`loop_closure:=true shutdown_export:=both`
+启用实验性后端，并额外生成 `maps/optimized/`，原始地图始终保留。
+后端已支持 Scan Context 检索、KISS-Matcher/small_gicp 配准、未来静态帧复核、
+鲁棒 iSAM2 和错误边撤销；真实 NCLT 独立质量检查尚未全面证明改善，不能直接将优化图当成质量更高的结果。
+
+离线重建、导出 ROI 和浏览瓦片：
+
+```bash
+ros2 run super_lio_mapping superm_export outputs/my_nclt/map/store \
+  outputs/my_nclt/exports/roi --leaf 0.1 --memory-mib 256 --pcd \
+  --roi -20 -20 -10 80 80 20
+ros2 launch super_lio_backend map_view.launch.py \
+  manifest:=/work/code/3D/SuperM-LIO/outputs/my_nclt/maps/raw/manifest.json \
+  center_x:=0.0 center_y:=0.0 radius:=100.0 max_points:=200000
+# 可选离线回环，必须使用新的图/地图目录
+ros2 run super_lio_backend superm_optimize outputs/my_nclt/map/store \
+  outputs/my_nclt/graph_review
+ros2 run super_lio_mapping superm_export outputs/my_nclt/map/store \
+  outputs/my_nclt/maps/review --leaf 0.1 --poses outputs/my_nclt/graph_review/poses.txt
+```
+
+瓦片点是局部坐标，必须加上 manifest 中各瓦片的 double `origin` 才能拼接；
+请使用配套浏览器。浏览器按高度配色并限制显示点数，完整地图文件不受显示抽样影响。
+小范围单 PCD 通过 `--pcd` 输出。`shutdown_export:=none` 可仅保存帧与图，稍后独立导出。
+`/slam/save_map` 支持异步保存，`/slam/reject_last_loop` 支持撤销最后一条已接受回环，
+接口详见 [后端说明](super_lio_backend/README.md)。
+
+完整 NCLT 对照中，10,200 帧新旧轨迹完全一致，前端峰值 RSS 从 3,868 MiB 降至 823 MiB；
+导出峰值另计。几十公里连续数据、前端大坐标精度与整容器并发资源尚未验收。
+参见 [实测与限制](docs/streaming_validation.md)、[总计划及阶段状态](docs/large_scale_mapping_plan.md)。
 
 ## 日志目录
 
@@ -203,6 +271,9 @@ ros2 launch super_lio retail_street.launch.py params_file:=/path/to/params.yaml
 修改 YAML 后重新执行 `./scripts/build_humble.sh`，再回放数据生成新地图。
 已丢弃的测量点无法从旧 PCD 中恢复。需要进一步增密时，可尝试
 `voxel_fliter_size: 0.10`、`ds_size: 0.03`，并观察处理耗时；这组可选值尚未实测。
+
+以下 `if_filter` / `save_interval` 说明适用于 legacy 保存；streamed 模式无损保存静态帧，
+导出分辨率由后端 `map_leaf` 或导出工具 `--leaf` 决定。
 
 `lio.map.if_filter: false` 可关闭最终空间降采样，保留全部静态建图输入点，动态目标过滤
 仍由 `dyn_obj.en` 控制。分块保存和 `lio.map.save_interval: -1` 均支持该开关；`-1`

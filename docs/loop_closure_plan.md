@@ -1,7 +1,12 @@
 # ROS 2 Humble 回环检测与图优化实施计划
 
-制定日期：2026-10-19。状态：方案设计，尚未实现后端或安装新增依赖。
+制定日期：2026-10-19，实施状态更新：2026-10-21。独立后端和固定依赖已经实现；
+合成回环、撤销和 ROS 接口验证通过。真实数据质量准入仍未完成，新统一启动入口默认关闭回环。
+下文保留设计细节，准确实现范围见[阶段状态](large_scale_mapping_plan.md#实施状态2026-10-21)和[实测记录](streaming_validation.md)。
 适用环境：Ubuntu 22.04、ROS 2 Humble、`vslam` Docker、本仓库独立构建环境。
+
+本文件保留回环与坐标约定的技术细节。完整实施顺序、流式存储、密度与质量验收以
+[大场景长距离建图总计划](large_scale_mapping_plan.md)为准；先完成等价存储，再接入回环。
 
 建议保留 Super-LIO＋M-detector 前端，增加独立进程运行的异步 SE(3) 位姿图后端。
 先完成 NCLT 上可验证的回环、鲁棒优化和全量静态地图重建，再处理 Retail_Street 的
@@ -15,7 +20,7 @@
 | 前端 | 保留当前 Super-LIO、IMU 去畸变、M-detector 静态点筛选 | 后端不阻塞前端，不直接修改 ESKF 状态 |
 | 候选检索 | NCLT 使用几何高度描述的 Scan Context 基线，叠加空间近邻候选 | Retail_Street 用累积子地图，比较 BTC / SOLiD；不依赖 NCLT 缺失的强度或 RGB |
 | 回环验证 | KISS-Matcher 提供困难初值下的粗配准，small_gicp 多尺度 GICP 精配准 | 几何重叠、退化检查、邻帧一致性共同决定是否入图 |
-| 图优化 | 固定 GTSAM 4.3.0，iSAM2，6 自由度位姿、里程计边、鲁棒回环边 | 基线稳定后比较 riSAM；错误边始终保留撤销和重建机制 |
+| 图优化 | GTSAM 4.3.0 为候选固定版本，兼容性验证后锁定；iSAM2，6 自由度位姿与鲁棒回环边 | 基线稳定后比较 riSAM；错误边始终保留撤销和重建机制 |
 | 地图 | 保存所有处理帧的静态点云及其局部坐标归属；用优化位姿重建 | 图节点稀疏化与地图点云密度分开配置 |
 | 质量提升 | 同时评估轨迹误差和重访处几何一致性 | 加入几何信息加权、优化后的漏回环补检，必要时研究离线 LiDAR BA |
 
@@ -77,8 +82,9 @@ flowchart LR
     J --> K[全局 RViz / 优化后 PCD]
 ```
 
-新增 `super_lio_interfaces` 消息包与 `super_lio_backend` C++ ament 包。
-前端仅依赖公共消息接口，后端不侵入 ESKF；关闭后端时保持现有建图流程。
+新增 `super_lio_mapping` 存储/导出库、`super_lio_interfaces` 消息包与 `super_lio_backend` C++ ament 包。
+前端仅依赖公共存储库和消息接口，后端不侵入 ESKF；关闭后端时保持原始估计流程。
+内部 `FrameRecord` 先可靠落盘，再用 `FrameCommitted` 通知后端；后端可从索引补读遗漏通知。
 高开销检索、配准、优化、地图重建分别排队处理，并记录队列长度和耗时。
 
 TF 采用 `map -> world -> body`：`world` 沿用当前前端局部坐标，承担通常的 odom 角色；
@@ -97,7 +103,8 @@ Z_ij = inverse(T_world_Bi_raw) * T_world_Bj_raw
 
 ## 4. 分阶段实施与交付
 
-按下面六个阶段逐项验收。阶段 1–5 构成可运行的首版，阶段 6 是质量增强。
+下面六阶段说明回环子模块内部工作；工程交付顺序遵循总计划 S0–S8，阶段 6 是可选增强。
+长距离模式不默认合并为单个全图 PCD，而是版本化瓦片与按需 ROI 导出。
 
 | 阶段 | 修改范围 | 交付与通过条件 |
 |---|---|---|
@@ -116,16 +123,18 @@ Z_ij = inverse(T_world_Bi_raw) * T_world_Bj_raw
   [KISS-Matcher ROS 2 示例 CMake](https://github.com/MIT-SPARK/KISS-Matcher/blob/main/ros/CMakeLists.txt)
   要求至少 3.24，并从浮动 `master` 获取 small_gicp。实施时固定源码提交和依赖清单，
   使用隔离的构建工具前缀满足要求；不要仅降低最低版本声明。
-- GTSAM 4.3.0 与所选 KISS-Matcher 核心先做兼容性构建。如果必须使用较旧依赖，明确记录
+- GTSAM 4.3.0 候选版本与所选 KISS-Matcher 核心先做兼容性构建。如果改用 GLIM，按其兼容组合
+  重新选择版本。如果必须使用较旧依赖，明确记录
   版本退回原因，并重新验证接口；不混用两个 GTSAM ABI。第三方源码和原许可证在本仓库
   `third_party/` 管理，不加载 FAST-LIVO2 或 Lightning 的安装环境。
 - 依赖构建记录与所有运行日志写入 `log/`，结果写入 `outputs/<run>/`。
 
 ### 阶段 2：帧接口、时间与密度
 
-- 新建 `MappingFrame.msg`，每个已处理建图帧包含单调 `session_id/frame_id`、扫描起止时间、
-  点云参考时刻、配套原始位姿、静态本体点云、前端质量字段。后端据此选择关键帧。
-  跨 bag 重放、时间重置必须开启新 session，禁止跨 session 连边。
+- 新建内部 `FrameRecord`，每个已处理建图帧包含单调 `session_id/frame_id`、扫描起止时间、
+  点云参考时刻、配套原始位姿、静态本体点云、前端质量字段，可靠落盘后发送 `FrameCommitted`。
+  后端按索引读取并选择关键帧。跨 bag 重放、时间重置必须开启新 session，禁止自动跨 session
+  里程计边；跨 session 回环/重定位必须显式验证。
 - 接口放在动态筛选和位姿估计完成后，从同一个状态快照生成，不受 `output.dense`、
   RViz 发布节流或 `g_pub_step` 影响。先核实去畸变到扫描结束时的状态一致性。
 - 点云保存分两路：配准/描述子使用稀疏云；建图存储保留当前密度的全部静态处理帧。
@@ -178,10 +187,11 @@ Z_ij = inverse(T_world_Bi_raw) * T_world_Bj_raw
 - 新增 `/slam/path_optimized`、`/slam/map_optimized`、回环边 Marker 与配准调试显示。
   后端 RViz 使用 `map` 固定坐标和 Move Camera；全图消息表示最新地图快照，避免将回环
   前后的扫描在 RViz 中持续累计。不能只修正 TF、继续堆积旧点云后声称全图已优化。
-- 保存服务等待输入帧、优化任务与最终地图快照完成，统一图版本，再原子写入结果目录。
+- 保存服务固定输入帧上限与图版本，等待对应持久化、优化与最终地图快照完成，再原子写入结果目录。
   Ctrl-C 尽量完成相同收尾流程；异常退出保留已落盘帧和因子账本供恢复。
-- 输出 `map_raw.pcd`、`map_optimized.pcd`、原始/优化 TUM 轨迹、图与边记录及验证报告。
-  两张地图使用相同静态帧和最终体素。优化后重叠体素合并，点数可能减少，不能据此判定变稀疏。
+- 输出原始/优化地图瓦片、TUM 轨迹、图与边记录及验证报告；小图或指定 ROI 可另导出
+  `map_raw.pcd`、`map_optimized.pcd`。两种地图使用相同静态帧和最终体素。
+  优化后重叠体素合并，点数可能减少，不能据此判定变稀疏。
 
 ### 阶段 6：质量增强
 
@@ -229,10 +239,11 @@ NCLT 的独立真值从[数据集官方来源](https://robots.engin.umich.edu/nc
 
 ## 6. 预计文件范围与完成边界
 
-拟新增公共消息包、后端包、两数据集后端 YAML、后端 launch / RViz 配置与验证脚本；
+拟新增公共存储/导出库、消息包、后端包、两数据集后端 YAML、后端 launch / RViz 配置与验证脚本；
 拟修改前端帧导出、构建脚本的依赖选择、地图保存协调，以及中英文 README。
-后端内部拆分 `FrameStore`、`KeyframeManager`、`CandidateSearch`、`LoopVerifier`、
-`PoseGraph`、`MapBuilder`，检索和优化策略可替换，避免将所有逻辑塞进 `super_lio.cpp`。
+后端内部拆分 `KeyframeManager`、`SubmapBuilder`、`CandidateSearch`、`LoopVerifier`、`PoseGraph`，
+帧存储、缓存和地图导出由公共库的 `FrameReader`、`CloudCache`、`TileExporter` 承担。
+检索和优化策略可替换，避免将所有逻辑塞进 `super_lio.cpp`。
 
 首版完成边界是：Humble/vslam 可独立构建，NCLT 的真实回环经验证后改善重访结构，
 Retail_Street 的有限视场/无回环行为有记录，优化轨迹和稠密静态 PCD 一致，日志集中管理。

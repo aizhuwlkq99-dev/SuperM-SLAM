@@ -40,6 +40,9 @@ def main():
         client = monitor.create_client(ExportMap, '/slam/save_map')
         assert client.wait_for_service(timeout_sec=20), 'Backend failed to start'
         config = yaml.safe_load((output / 'parameters.yaml').read_text())['/**']['ros__parameters']
+        provenance = json.loads((output / 'provenance.json').read_text())
+        assert len(provenance['git_revision']) == 40, 'Source revision was not recorded'
+        assert isinstance(provenance['working_tree_dirty'], bool), 'Dirty status was not recorded'
         lidar = '/' + config['lio.ros.lidar_topic'].lstrip('/')
         imu = '/' + config['lio.ros.imu_topic'].lstrip('/')
         deadline = time.monotonic() + 20

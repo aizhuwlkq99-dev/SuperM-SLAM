@@ -1,7 +1,7 @@
 """Run streamed mapping with independent, optional loop optimization in Humble."""
-import os
 import hashlib
 import json
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +18,10 @@ def _start(context):
     dataset = LaunchConfiguration('dataset').perform(context)
     if dataset not in ('nclt', 'retail'):
         raise ValueError('dataset must be nclt or retail')
-    enabled = lambda name: LaunchConfiguration(name).perform(context).lower() == 'true'
+
+    def enabled(name):
+        return LaunchConfiguration(name).perform(context).lower() == 'true'
+
     output = Path(LaunchConfiguration('output_dir').perform(context)).expanduser().resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError('output_dir must be a new or empty directory')
@@ -29,6 +32,7 @@ def _start(context):
     params_file = LaunchConfiguration('params_file').perform(context) or str(config)
     # Resolve once so node-name matching cannot silently skip parameters in upstream YAML.
     document = yaml.safe_load(Path(params_file).read_text())
+
     def flatten(values, prefix=''):
         result = {}
         for key, value in values.items():
@@ -51,13 +55,15 @@ def _start(context):
     })
     (output / 'parameters.yaml').write_text(
         yaml.safe_dump({'/**': {'ros__parameters': params}}, sort_keys=True))
-    git = ['git', '-c', f'safe.directory={Path.cwd()}']
+    # Explicit paths support root in Docker reading a repository owned by the host user.
+    workspace = Path(os.environ.get('SUPERM_WORKSPACE', Path.cwd())).resolve()
+    git = ['git', f'--git-dir={workspace / ".git"}', f'--work-tree={workspace}']
     revision = subprocess.run(git + ['rev-parse', 'HEAD'], capture_output=True, text=True)
     changes = subprocess.run(git + ['status', '--porcelain'], capture_output=True, text=True)
     (output / 'provenance.json').write_text(json.dumps({
         'dataset': dataset,
         'git_revision': revision.stdout.strip() if revision.returncode == 0 else 'unknown',
-        'working_tree_dirty': bool(changes.stdout.strip()),
+        'working_tree_dirty': bool(changes.stdout.strip()) if changes.returncode == 0 else None,
         'source_configuration': str(params_file),
         'configuration_sha256': hashlib.sha256(Path(params_file).read_bytes()).hexdigest(),
         'coordinate_frame': 'body/IMU; original actual deskew reference time',
@@ -86,7 +92,8 @@ def _start(context):
 def generate_launch_description():
     repo = Path(os.environ.get('SUPERM_WORKSPACE', Path.cwd()))
     run = repo / 'outputs' / ('large_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
-    log = repo / 'log' / 'ros'
+    log_root = Path(os.environ.get('SUPERM_LOG_DIR', str(repo / 'log')))
+    log = Path(os.environ.get('ROS_LOG_DIR', str(log_root / 'ros')))
     log.mkdir(parents=True, exist_ok=True)
     return LaunchDescription([
         SetEnvironmentVariable('ROS_LOG_DIR', str(log)),

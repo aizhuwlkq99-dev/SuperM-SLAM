@@ -13,7 +13,9 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     share = Path(get_package_share_directory('super_lio_backend'))
-    log = Path(os.environ.get('SUPERM_WORKSPACE', Path.cwd())) / 'log' / 'ros'
+    repo = Path(os.environ.get('SUPERM_WORKSPACE', Path.cwd()))
+    log_root = Path(os.environ.get('SUPERM_LOG_DIR', str(repo / 'log')))
+    log = Path(os.environ.get('ROS_LOG_DIR', str(log_root / 'ros')))
     log.mkdir(parents=True, exist_ok=True)
     defaults = {'manifest': '', 'center_x': '0.0', 'center_y': '0.0', 'center_z': '0.0',
                 'radius': '100.0', 'max_points': '200000', 'rviz': 'true'}

@@ -18,6 +18,12 @@ class MappingNode : public rclcpp::Node {
     store_ = declare_parameter<std::string>("store_path", "");
     output_ = declare_parameter<std::string>("graph_directory", "");
     leaf_ = declare_parameter<double>("map_leaf", .1);
+    shutdown_export_ = declare_parameter<std::string>("shutdown_export", "none");
+    shutdown_maps_ = declare_parameter<std::string>("shutdown_map_directory", "");
+    if (shutdown_export_ != "none" && shutdown_export_ != "raw" && shutdown_export_ != "both")
+      throw std::invalid_argument("shutdown_export must be none, raw, or both");
+    if (shutdown_export_ != "none" && shutdown_maps_.empty())
+      throw std::invalid_argument("shutdown_map_directory is required for shutdown export");
     if (store_.empty() || output_.empty())
       throw std::invalid_argument("store_path and graph_directory are required");
     superm::BackendOptions options;
@@ -123,6 +129,8 @@ class MappingNode : public rclcpp::Node {
       export_thread_.join();
   }
   void finish() {
+    if (export_thread_.joinable())
+      export_thread_.join();
     // The frontend flushes asynchronously on the same shutdown signal.
     for (int i = 0; i < 100; ++i) {
       try {
@@ -138,6 +146,25 @@ class MappingNode : public rclcpp::Node {
     graph_->save();
     std::cout << "Backend saved: frames=" << graph_->frames().size()
               << " keyframes=" << graph_->keyframes() << " loops=" << graph_->loops() << std::endl;
+    if (shutdown_export_ != "none" && !graph_->frames().empty()) {
+      boost::property_tree::ptree manifest;
+      boost::property_tree::read_json((superm::fs::path(store_) / "manifest.json").string(),
+                                      manifest);
+      if (!manifest.get<bool>("complete", false))
+        throw std::runtime_error("Frontend store is incomplete; automatic export skipped");
+      superm::ExportOptions options;
+      options.leaf = leaf_;
+      for (const auto& frame : graph_->frames())
+        options.poses.push_back(frame.pose);
+      auto maps = superm::fs::path(shutdown_maps_);
+      superm::export_map(store_, maps / "raw", options);
+      if (shutdown_export_ == "both") {
+        options.poses = graph_->frame_poses();
+        options.graph_version = "graph-loops-" + std::to_string(graph_->loops());
+        superm::export_map(store_, maps / "optimized", options);
+      }
+      std::cout << "Shutdown map export complete: " << maps << std::endl;
+    }
   }
 
  private:
@@ -186,7 +213,7 @@ class MappingNode : public rclcpp::Node {
       map_->publish(msg);
     }
   }
-  std::string store_, output_;
+  std::string store_, output_, shutdown_export_, shutdown_maps_;
   double leaf_;
   size_t ticks_ = 0;
   std::unique_ptr<superm::Backend> graph_;

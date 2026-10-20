@@ -8,6 +8,12 @@ build_log="$log_root/build/$(date -u +%Y%m%dT%H%M%S_%N)_$$.log"
 source /opt/ros/humble/setup.bash
 cd "$repo_dir"
 export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+build_targets=(super_lio)
+if [[ "${1:-}" == "--with-backend" ]]; then
+  shift
+  "$repo_dir/scripts/build_backend_deps.sh"
+  build_targets+=(super_lio_backend)
+fi
 echo "Build log: $build_log"
-colcon --log-base "$log_root/colcon" build --packages-up-to super_lio --parallel-workers 2 \
+colcon --log-base "$log_root/colcon" build --packages-up-to "${build_targets[@]}" --parallel-workers 2 \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF "$@" 2>&1 | tee "$build_log"

@@ -21,7 +21,10 @@ add_executable(mapping_check tests/mapping_check.cpp)
 target_link_libraries(mapping_check ${PROJECT_NAME})
 
 install(TARGETS ${PROJECT_NAME} EXPORT mappingTargets LIBRARY DESTINATION lib)
-install(TARGETS superm_export mapping_check DESTINATION lib/${PROJECT_NAME})
+add_executable(mapping_reference_check tests/reference_check.cpp)
+target_link_libraries(mapping_reference_check ${PROJECT_NAME})
+
+install(TARGETS superm_export mapping_check mapping_reference_check DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 ament_export_targets(mappingTargets HAS_LIBRARY_TARGET)
 ament_export_dependencies(Eigen3 PCL Threads)

@@ -239,6 +239,15 @@ ROSWrapper::ROSWrapper(const rclcpp::Node::SharedPtr& node) : node_(node) {
   subIMU_ = node_->create_subscription<sensor_msgs::msg::Imu>(g_imu_topic, imu_qos,
     [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { imuHandler(msg); });
   pub_odom_ = publisher<nav_msgs::msg::Odometry>("/lio/odom", 100);
+  const int path_limit = node_->declare_parameter<int>("lio.output.path_max_points", 5000);
+  path_publish_period_ = node_->declare_parameter<double>("lio.output.path_publish_period", 1.0);
+  const int lidar_limit = node_->declare_parameter<int>("lio.ros.max_lidar_queue", 128);
+  const int imu_limit = node_->declare_parameter<int>("lio.ros.max_imu_queue", 20000);
+  if (path_limit < 2 || path_publish_period_ <= 0 || lidar_limit < 1 || imu_limit < 1)
+    throw std::invalid_argument("invalid path/input queue limits");
+  path_max_points_ = path_limit;
+  max_lidar_queue_ = lidar_limit;
+  max_imu_queue_ = imu_limit;
   pub_path_ = publisher<nav_msgs::msg::Path>("/lio/path", 1);
   pub_path_robot_ = publisher<sensor_msgs::msg::PointCloud2>("/lio/path_robot", 1);
   br_ = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
@@ -294,6 +303,8 @@ void ROSWrapper::livoxHandler(const livox_ros_driver2::msg::CustomMsg::ConstShar
     throw std::runtime_error("LiDAR time moved backwards; restart node for a new bag playback");
   }
   last_received_lidar_ = lidar_data.start_time;
+  if (lidar_buffer_.size() >= max_lidar_queue_)
+    throw std::runtime_error("LiDAR queue limit exceeded; reduce playback rate");
   lidar_buffer_.push_back(lidar_data);
   ++queued_lidar_;
 }
@@ -456,6 +467,8 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::ConstSharedP
     return;
   }
 
+  if (lidar_buffer_.size() >= max_lidar_queue_)
+    throw std::runtime_error("LiDAR queue limit exceeded; reduce playback rate");
   lidar_buffer_.push_back(lidar_data);
   ++queued_lidar_;
 }
@@ -494,6 +507,8 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::ConstSharedPtr& msg){
     throw std::runtime_error("IMU time moved backwards; restart node for a new bag playback");
   }
 
+  if (imu_buffer_.size() >= max_imu_queue_)
+    throw std::runtime_error("IMU queue limit exceeded; input cannot keep up");
   imu_buffer_.push_back(data);
   last_timestamp_imu_ = data.secs;
   last_imu_arrival_ = std::chrono::steady_clock::now();
@@ -663,7 +678,12 @@ void ROSWrapper::pub_odom(const NavState& state){
     point.header = odom.header;
     point.pose = odom.pose.pose;
     path_.poses.push_back(point);
-    pub_path_->publish(path_);
+    if (path_.poses.size() > path_max_points_)
+      path_.poses.erase(path_.poses.begin());
+    if (state.timestamp - last_path_publish_ >= path_publish_period_) {
+      pub_path_->publish(path_);
+      last_path_publish_ = state.timestamp;
+    }
 
     /// sensor_msgs::msg::PointCloud2
     // pcl::PointXYZRGB point_robot;

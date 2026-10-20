@@ -148,6 +148,10 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;        // robo path
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_path_robot_;
 
+  size_t path_max_points_ = 5000;
+  double path_publish_period_ = 1.0;
+  double last_path_publish_ = -1.0;
+  size_t max_lidar_queue_ = 128, max_imu_queue_ = 20000;
   nav_msgs::msg::Path path_;
   sensor_msgs::msg::PointCloud2 msg_path_point_;
   sensor_msgs::msg::PointCloud2 global_map_msg_;

@@ -3,32 +3,42 @@
 #ifndef SUPER_LIO_H_
 #define SUPER_LIO_H_
 
-#include <queue>
-#include <vector>
-#include <iostream>
-#include <cassert>
-#include <filesystem>
-
-#include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/io/pcd_io.h>
 
-#include "basic/alias.h"
-#include "common/ds.h"
-#include "common/timer.h"
-#include "params.h"
+#include <cassert>
+#include <filesystem>
+#include <iostream>
+#include <queue>
+#include <super_lio_interfaces/msg/frame_committed.hpp>
+#include <super_lio_interfaces/msg/mapping_status.hpp>
+#include <super_lio_mapping/store.hpp>
+#include <vector>
+
 #include "ESKF.h"
 #include "OctVoxMap/OctVoxMap.hpp"
 #include "OctVoxMap/VoxelGridFilter.h"
-#include "ros/ROSWrapper.h"
+#include "basic/alias.h"
+#include "common/ds.h"
+#include "common/timer.h"
 #include "lio/dyn_filter.h"
+#include "params.h"
+#include "ros/ROSWrapper.h"
 
 namespace LI2Sup{
 
 class SuperLIO{
 public:
   SuperLIO(){};
-  ~SuperLIO(){};
+  virtual ~SuperLIO() {
+    if (frame_store_) {
+      try {
+        frame_store_->close();
+      } catch (...) {
+      }
+    }
+  };
 
   void setROSWrapper(const ROSWrapper::Ptr& wrapper){
     data_wrapper_ = wrapper;
@@ -85,6 +95,10 @@ protected:
   std::vector<std::array<double, 4>> abcd_vec_;
   int pcd_index_ = -1;
 
+  std::unique_ptr<superm::FrameStore> frame_store_;
+  rclcpp::Publisher<super_lio_interfaces::msg::FrameCommitted>::SharedPtr commit_pub_;
+  rclcpp::Publisher<super_lio_interfaces::msg::MappingStatus>::SharedPtr store_status_pub_;
+  uint64_t stored_frame_id_ = 0;
   Timer time_record_;
   std::size_t processing_samples_ = 0;
   double processing_mean_ms_ = 0.0;

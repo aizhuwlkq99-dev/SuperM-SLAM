@@ -78,7 +78,39 @@ void SuperLIO::init(){
   dyn_filter_.reset(new DynObjFilterWrapper()); // M-Detector
   dyn_filter_->init(data_wrapper_->node());
 
-  if(g_save_map){
+  if (g_save_map && data_wrapper_->node()->declare_parameter<std::string>("lio.map.mode",
+                                                                          "legacy") == "streamed") {
+    auto node = data_wrapper_->node();
+    superm::StoreOptions options;
+    const int queue_mib = node->declare_parameter<int>("lio.map.queue_mib", 128);
+    const int chunk_mib = node->declare_parameter<int>("lio.map.chunk_mib", 32);
+    if (queue_mib < 1 || chunk_mib < 1)
+      throw std::invalid_argument("mapping budgets must be positive");
+    options.queue_bytes = size_t(queue_mib) * 1024 * 1024;
+    options.chunk_bytes = size_t(chunk_mib) * 1024 * 1024;
+    options.commit_seconds = node->declare_parameter<double>("lio.map.commit_seconds", 1.0);
+    commit_pub_ = node->create_publisher<super_lio_interfaces::msg::FrameCommitted>(
+        "/slam/frame_committed", 1);
+    store_status_pub_ =
+        node->create_publisher<super_lio_interfaces::msg::MappingStatus>("/slam/storage_status", 1);
+    const std::string store_path = g_save_map_dir + "/store";
+    frame_store_ = std::make_unique<superm::FrameStore>(
+        store_path, options, [this, store_path](const superm::FrameInfo& info) {
+          super_lio_interfaces::msg::FrameCommitted msg;
+          msg.header.frame_id = "body";
+          msg.header.stamp = rclcpp::Time(int64_t(info.reference * 1e9));
+          msg.store_path = store_path;
+          msg.durable_frames = info.id + 1;
+          if (rclcpp::ok()) {
+            try {
+              commit_pub_->publish(msg);
+            } catch (const rclcpp::exceptions::RCLError&) {
+            }
+          }
+        });
+    LOG(INFO) << "Streamed frame store: " << store_path;
+  }
+  if (g_save_map && !frame_store_) {
     point_map_.reset(new PointCloudType());
   }
 
@@ -273,6 +305,33 @@ void SuperLIO::DynamicFilter(){
 void SuperLIO::caceData(){
   if(!g_save_map) return;
   auto state = kf_->GetNavState();
+  if (frame_store_) {
+    superm::Frame frame;
+    frame.id = stored_frame_id_;
+    frame.start = measures_.lidar.start_time;
+    frame.end = measures_.lidar.end_time;
+    // Deskew uses T_end at the last integrated IMU state, not a relabelled scan-end pose.
+    frame.reference = state.timestamp;
+    frame.pose.block<3, 3>(0, 0) = state.R.R_.cast<double>();
+    frame.pose.block<3, 1>(0, 3) = state.p.cast<double>();
+    frame.cloud = (g_if_filter || dyn_filter_->enabled()) ? *ds_undistort_ : *scan_undistort_full_;
+    frame_store_->submit(std::move(frame));
+    ++stored_frame_id_;
+    if (stored_frame_id_ % 10 == 0) {
+      auto stats = frame_store_->stats();
+      super_lio_interfaces::msg::MappingStatus status;
+      status.header.frame_id = "world";
+      status.header.stamp = data_wrapper_->node()->now();
+      status.store_path = g_save_map_dir + "/store";
+      status.submitted_frames = stats.queued;
+      status.durable_frames = stats.durable;
+      status.queue_bytes = stats.queue_bytes;
+      status.peak_queue_bytes = stats.peak_queue_bytes;
+      status.error = stats.error;
+      store_status_pub_->publish(status);
+    }
+    return;
+  }
   Eigen::Matrix4f transformation = Eigen::Matrix4f::Identity();
   transformation.block<3, 3>(0, 0) = state.R.R_.cast<float>();
   transformation.block<3, 1>(0, 3) = state.p.cast<float>();
@@ -362,6 +421,13 @@ void SuperLIO::ProcessCaceMap(){
 
 void SuperLIO::saveMap(){
   if(!g_save_map) return;
+  if (frame_store_) {
+    frame_store_->close();
+    auto stats = frame_store_->stats();
+    LOG(INFO) << "Streamed storage complete: frames=" << stats.durable << " points=" << stats.points
+              << " peak_queue_bytes=" << stats.peak_queue_bytes;
+    return;
+  }
   if(g_pcd_save_interval > 0){
     LOG(INFO) << YELLOW << " ---> Saving last cace ... " << RESET;
     if (point_map_->size() > 0) {

@@ -1,0 +1,9 @@
+# Empty snapshot freezes the current graph; raw_poses selects unchanged odometry.
+string output_directory
+string pose_snapshot
+float64 leaf_size
+bool raw_poses
+bool single_pcd
+---
+bool accepted
+string message

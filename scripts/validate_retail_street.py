@@ -29,6 +29,8 @@ def main():
     parser.add_argument('--log-dir', type=Path,
                         help='Log directory; defaults to log/validation/<run>_<timestamp>')
     parser.add_argument('--dynamic', action='store_true')
+    parser.add_argument('--streamed', action='store_true', help='Use bounded frame storage and export tiles after replay')
+    parser.add_argument('--export-pcd', action='store_true', help='Also export a single PCD for small-map comparison')
     parser.add_argument('--before-observe', action='store_true')
     parser.add_argument('--dataset', choices=['retail', 'nclt'], default='retail')
     parser.add_argument('--rate', type=float, default=1.0)
@@ -63,6 +65,7 @@ def main():
     log_dir.mkdir(parents=True, exist_ok=False)
     # Configure logging before creating the monitor or its child processes.
     os.environ['ROS_LOG_DIR'] = str(log_dir / 'ros')
+    os.environ.setdefault('ROS_DOMAIN_ID', str(20 + os.getpid() % 60))
     runtime_env = dict(os.environ, GLOG_log_dir=str(log_dir / 'glog'))
     exe = Path(get_package_prefix('super_lio')) / 'lib/super_lio/super_lio_node'
     # Use a domain separate from the usual domain 0; callers can choose one explicitly.
@@ -138,6 +141,8 @@ def main():
                 '-p', f'lio.kf.dyn_filter_before_observe:={str(args.before_observe).lower()}',
                 '-p', f'lio.map.save_map_dir:={output}/map',
                 '-p', f'lio.evo.pose_output_dir:={output}/trajectory']
+    if args.streamed:
+        node_cmd.extend(['-p', 'lio.map.mode:=streamed'])
     for override in args.param:
         node_cmd.extend(['-p', override])
     node = subprocess.Popen(node_cmd, stdout=node_log, stderr=subprocess.STDOUT, env=runtime_env)
@@ -281,6 +286,26 @@ def main():
                 if line.startswith(b'DATA '):
                     break
     stats['trajectory_poses'] = sum(1 for row in trajectory.read_text().splitlines() if row and not row.startswith('#')) if trajectory.exists() else 0
+    store_manifest = output / 'map/store/manifest.json'
+    if args.streamed:
+        if store_manifest.exists():
+            stats['storage'] = json.loads(store_manifest.read_text())
+            export_exe = Path(get_package_prefix('super_lio_mapping')) / 'lib/super_lio_mapping/superm_export'
+            export_cmd = [str(export_exe), str(output / 'map/store'), str(output / 'map/raw'),
+                          '--leaf', str(params['map']['ds_size'])]
+            if args.export_pcd:
+                export_cmd.append('--pcd')
+            with (log_dir / 'export.log').open('w') as export_log:
+                exported = subprocess.run(export_cmd, stdout=export_log, stderr=subprocess.STDOUT, env=runtime_env)
+            if exported.returncode:
+                failure = 'Streamed map export failed; inspect export.log'
+            else:
+                result = json.loads((output / 'map/raw/manifest.json').read_text())
+                stats['map_points'] = result['points']
+                stats['map_bytes'] = sum(p.stat().st_size for p in (output / 'map/raw/tiles').glob('*.pcd'))
+        else:
+            failure = 'Missing streamed storage manifest'
+
     if not failure:
         checks = [node.returncode == 0, stats['odometry'] > 20, stats['cloud_frames'] > 20,
                   stats['invalid_odometry'] == 0, stats['stamp_regressions'] == 0,
@@ -288,6 +313,11 @@ def main():
                   stats['trajectory_poses'] > 20, stats['count_errors'] == 0]
         checks += [stats['invalid_clouds'] == 0, stats['mapping_count_errors'] == 0,
                    not stats['voxel_index_overflow']]
+        if args.streamed:
+            storage = stats.get('storage', {})
+            checks += [storage.get('complete') is True,
+                       storage.get('durable_frames') == stats['trajectory_poses'],
+                       storage.get('submitted_frames') == storage.get('durable_frames')]
         if args.dynamic:
             checks += [stats['filter_frames'] > 20, stats['dynamic_points'] > 0,
                        stats['static_points'] > 0, stats['matched_mapping_frames'] > 20]

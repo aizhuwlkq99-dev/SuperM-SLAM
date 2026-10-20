@@ -14,6 +14,8 @@
   <depend>visualization_msgs</depend>
   <depend>pcl_conversions</depend>
   <depend>basic</depend>
+  <depend>super_lio_mapping</depend>
+  <depend>super_lio_interfaces</depend>
   <depend>m_detector</depend>
   <depend>tf2_ros</depend>
   <depend>livox_ros_driver2</depend>
